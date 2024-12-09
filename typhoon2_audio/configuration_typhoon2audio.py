@@ -45,8 +45,15 @@ class BEATsConfig(PretrainedConfig):
     def update(self, cfg: dict):
         self.__dict__.update(cfg)
 
-class Typhoon2AudioEncoderConfig(PretrainedConfig):
-    def __init__(self, **kwargs):
+
+class Typhoon2AudioConfig(PretrainedConfig):
+    model_type = "typhoon2audio"
+
+    def __init__(self, **kwargs):   
+        # LLM -- Llama3
+        self.llama_base_model = "scb10x/typhoon-2-llama31-8b-instruct-beta-v1"
+
+        # Whisper
         self.whisper_extractor_feature_size=128
         self.whisper = WhisperConfig(
             activation_dropout=0.0,
@@ -94,9 +101,8 @@ class Typhoon2AudioEncoderConfig(PretrainedConfig):
         self.second_per_frame=0.333333
         self.second_stride=0.333333
 
-class Typhoon2AudioDecoderConfig(PretrainedConfig):
-    def __init__(self, **kwargs):
         # SpeechDecoder CTC
+        self.pretraining_tp = 1
         self.ctc_decoder_config='(4,4096,32,11008)'
         self.ctc_upsample_factor=25
         self.ctc_loss_weight=1.0
@@ -157,15 +163,4 @@ class Typhoon2AudioDecoderConfig(PretrainedConfig):
                 'var_pred_dropout': 0.5
             } 
         }
-
-class Typhoon2AudioConfig(PretrainedConfig):
-    model_type = "typhoon2audio"
-    def __init__(self, **kwargs):   
-        # Speech Encoder (WhisperEncoder + BEATs + QFormer)
-        # whisper_path = "biodatlab/whisper-th-large-v3-combined",  # or local path
-        self.audio_encoder = Typhoon2AudioEncoderConfig()
-        # LLM -- Llama3
-        self.llama_base_model = "scb10x/typhoon-2-llama31-8b-instruct-beta-v1"
-        # Speech Decoder
-        self.audio_decoder = Typhoon2AudioDecoderConfig()
         super().__init__(**kwargs)

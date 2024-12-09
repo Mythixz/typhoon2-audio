@@ -18,8 +18,33 @@ from transformers import (
     PreTrainedModel,
     GenerationMixin,
     AutoTokenizer, 
-    AutoModelForCausalLM
+    AutoModelForCausalLM,
+    LlamaForCausalLM
 )
+from transformers.cache_utils import Cache, StaticCache
+from transformers.generation.utils import (
+    GenerationConfig,
+    GenerationMode,
+    LogitsProcessorList,
+    StoppingCriteriaList,
+    GenerateOutput, 
+    GenerationMixin,
+    GenerateEncoderDecoderOutput,
+    GenerateDecoderOnlyOutput,
+    GenerateNonBeamOutput,
+    is_deepspeed_zero3_enabled,
+    is_torchdynamo_compiling,
+    NEED_SETUP_CACHE_CLASSES_MAPPING,
+    QUANT_BACKEND_CLASSES_MAPPING,
+    is_hqq_available,
+    QuantizedCacheConfig,
+    is_quanto_available,
+    DynamicCache,
+    EncoderDecoderCache,
+    logging
+)
+
+from transformers.modeling_outputs import CausalLMOutputWithPast
 import soundfile as sf
 from .configuration_typhoon2audio import Typhoon2AudioConfig
 # ---------------------------------------------------- # 
@@ -28,7 +53,7 @@ import math
 import os
 import warnings
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, Union
+from typing import Optional, Tuple, Dict, Any, Union, Callable, List
 import torch.utils.checkpoint
 from torch.nn import CrossEntropyLoss
 from transformers.activations import ACT2FN
@@ -69,6 +94,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------- # 
 # Speech Decoder
 import copy
+import inspect
 from huggingface_hub import hf_hub_download
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers import LlamaConfig
@@ -76,9 +102,598 @@ from transformers import LlamaConfig
 from fairseq.models.text_to_speech.vocoder import CodeHiFiGANVocoder
 # ---------------------------------------------------------- # 
 
+class GenerationWithCTC(GenerationMixin):
 
-class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
+    @torch.no_grad()
+    def generate(
+        self,
+        inputs: Optional[torch.Tensor] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        logits_processor: Optional[LogitsProcessorList] = None,
+        stopping_criteria: Optional[StoppingCriteriaList] = None,
+        prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
+        synced_gpus: Optional[bool] = None,
+        assistant_model: Optional["PreTrainedModel"] = None,
+        streamer: Optional["BaseStreamer"] = None,
+        streamer_unit: Optional["BaseStreamer"] = None,
+        streaming_unit_gen = False,
+        negative_prompt_ids: Optional[torch.Tensor] = None,
+        negative_prompt_attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Union[GenerateOutput, torch.LongTensor]:
+        # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
+        self._validate_model_class()
+        tokenizer = kwargs.pop("tokenizer", None)  # Pull this out first, we only use it for stopping criteria
+        generation_config, model_kwargs = self._prepare_generation_config(generation_config, **kwargs)
+
+        self._validate_model_kwargs(model_kwargs.copy())
+        self._validate_assistant(assistant_model)
+
+        # 2. Set generation parameters if not already defined
+        if synced_gpus is None:
+            if is_deepspeed_zero3_enabled() and dist.get_world_size() > 1:
+                synced_gpus = True
+            else:
+                synced_gpus = False
+
+        logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
+        stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
+
+        accepts_attention_mask = "attention_mask" in set(inspect.signature(self.forward).parameters.keys())
+        requires_attention_mask = "encoder_outputs" not in model_kwargs
+        kwargs_has_attention_mask = model_kwargs.get("attention_mask", None) is not None
+
+        # 3. Define model inputs
+        inputs_tensor, model_input_name, model_kwargs = self._prepare_model_inputs(
+            inputs, generation_config.bos_token_id, model_kwargs
+        )
+
+        batch_size = inputs_tensor.shape[0]
+
+        device = inputs_tensor.device
+        self._prepare_special_tokens(generation_config, kwargs_has_attention_mask, device=device)
+
+        # decoder-only models must use left-padding for batched generation.
+        if not self.config.is_encoder_decoder and not is_torchdynamo_compiling():
+            # If `input_ids` was given, check if the last id in any sequence is `pad_token_id`
+            # Note: If using, `inputs_embeds` this check does not work, because we want to be more hands-off.
+            if (
+                generation_config._pad_token_tensor is not None
+                and batch_size > 1
+                and len(inputs_tensor.shape) == 2
+                and torch.sum(inputs_tensor[:, -1] == generation_config._pad_token_tensor) > 0
+            ):
+                logger.warning(
+                    "A decoder-only architecture is being used, but right-padding was detected! For correct "
+                    "generation results, please set `padding_side='left'` when initializing the tokenizer."
+                )
+
+        # 4. Define other model kwargs
+        # decoder-only models with inputs_embeds forwarding must use caching (otherwise we can't detect whether we are
+        # generating the first new token or not, and we only want to use the embeddings for the first new token)
+        if not self.config.is_encoder_decoder and model_input_name == "inputs_embeds":
+            model_kwargs["use_cache"] = True
+        else:
+            model_kwargs["use_cache"] = generation_config.use_cache
+
+        if not kwargs_has_attention_mask and requires_attention_mask and accepts_attention_mask:
+            model_kwargs["attention_mask"] = self._prepare_attention_mask_for_generation(
+                inputs_tensor, generation_config._pad_token_tensor, generation_config._eos_token_tensor
+            )
+
+        if self.config.is_encoder_decoder and "encoder_outputs" not in model_kwargs:
+            # if model is encoder decoder encoder_outputs are created and added to `model_kwargs`
+            model_kwargs = self._prepare_encoder_decoder_kwargs_for_generation(
+                inputs_tensor, model_kwargs, model_input_name, generation_config
+            )
+
+        # 5. Prepare `input_ids` which will be used for auto-regressive generation
+        if self.config.is_encoder_decoder:
+            input_ids, model_kwargs = self._prepare_decoder_input_ids_for_generation(
+                batch_size=batch_size,
+                model_input_name=model_input_name,
+                model_kwargs=model_kwargs,
+                decoder_start_token_id=generation_config._decoder_start_token_tensor,
+                device=inputs_tensor.device,
+            )
+        # pm574
+        else:
+            input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop("input_ids")
+        # elif model_input_name == "input_ids" or "input_ids" in model_kwargs:
+        #     input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop("input_ids")
+        # elif model_input_name == "inputs_embeds":
+        #     input_ids = inputs_tensor
+        # else:
+        #     raise Exception("error here")
+
+
+        if generation_config.token_healing:
+            input_ids = self.heal_tokens(input_ids, tokenizer)
+
+        if streamer is not None:
+            streamer.put(input_ids.cpu())
+
+        # 6. Prepare `max_length` depending on other stopping criteria.
+        input_ids_length = input_ids.shape[-1]
+        has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
+        has_default_min_length = kwargs.get("min_length") is None and generation_config.min_length is not None
+        generation_config = self._prepare_generated_length(
+            generation_config=generation_config,
+            has_default_max_length=has_default_max_length,
+            has_default_min_length=has_default_min_length,
+            model_input_name=model_input_name,
+            inputs_tensor=inputs_tensor,
+            input_ids_length=input_ids_length,
+        )
+
+        use_dynamic_cache_by_default = False
+        if "mamba" in self.__class__.__name__.lower():
+            cache_name = "cache_params"
+        else:
+            cache_name = "past_key_values"
+        if generation_config.cache_implementation is not None and (model_kwargs.get(cache_name) is not None):
+            raise ValueError(
+                f"Passing both `cache_implementation` (used to initialize certain caches) and `{cache_name}` (a "
+                "Cache object) is unsupported. Please use only one of the two."
+            )
+        elif generation_config.cache_implementation is not None:
+            if generation_config.cache_implementation in NEED_SETUP_CACHE_CLASSES_MAPPING:
+                if generation_config.cache_implementation == "static" and not self._supports_static_cache:
+                    raise ValueError(
+                        "This model does not support `cache_implementation='static'`. Please check the following "
+                        "issue: https://github.com/huggingface/transformers/issues/28981"
+                    )
+                model_kwargs[cache_name] = self._get_cache(
+                    generation_config.cache_implementation,
+                    getattr(generation_config, "num_beams", 1) * batch_size,
+                    generation_config.max_length,
+                    model_kwargs,
+                )
+            elif generation_config.cache_implementation == "quantized":
+                if not self._supports_quantized_cache:
+                    raise ValueError(
+                        "This model does not support the quantized cache. If you want your model to support quantized "
+                        "cache, please open an issue."
+                    )
+
+                cache_config = (
+                    generation_config.cache_config
+                    if generation_config.cache_config is not None
+                    else QuantizedCacheConfig()
+                )
+                cache_class = QUANT_BACKEND_CLASSES_MAPPING[cache_config.backend]
+
+                if cache_config.backend == "quanto" and not is_quanto_available():
+                    raise ImportError(
+                        "You need to install `quanto` in order to use KV cache quantization with quanto backend. "
+                        "Please install it via  with `pip install quanto`"
+                    )
+                elif cache_config.backend == "HQQ" and not is_hqq_available():
+                    raise ImportError(
+                        "You need to install `HQQ` in order to use KV cache quantization with HQQ backend. "
+                        "Please install it via  with `pip install hqq`"
+                    )
+
+                model_kwargs[cache_name] = cache_class(cache_config)
+
+        # Use DynamicCache() instance by default. This will avoid back and forth from legacy format that
+        # keeps copying the cache thus using much more memory
+        elif generation_config.cache_implementation is None and self._supports_default_dynamic_cache():
+            past = model_kwargs.get(cache_name, None)
+            requires_cross_attention_cache = (
+                self.config.is_encoder_decoder or model_kwargs.get("encoder_outputs") is not None
+            )
+            if past is None:
+                model_kwargs[cache_name] = (
+                    DynamicCache()
+                    if not requires_cross_attention_cache
+                    else EncoderDecoderCache(DynamicCache(), DynamicCache())
+                )
+                use_dynamic_cache_by_default = True
+            elif isinstance(past, tuple):
+                model_kwargs[cache_name] = (
+                    DynamicCache.from_legacy_cache(past)
+                    if not requires_cross_attention_cache
+                    else EncoderDecoderCache.from_legacy_cache(past)
+                )
+                use_dynamic_cache_by_default = True
+                
+        self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
+
+        # 7. determine generation mode
+        generation_mode = generation_config.get_generation_mode(assistant_model)
+
+        if (streamer is not None or streamer_unit is not None) and (generation_config.num_beams > 1):
+            raise ValueError(
+                "`streamer` cannot be used with beam search (yet!). Make sure that `num_beams` is set to 1."
+            )
+
+        if self.device.type != input_ids.device.type:
+            warnings.warn(
+                "You are calling .generate() with the `input_ids` being on a device type different"
+                f" than your model's device. `input_ids` is on {input_ids.device.type}, whereas the model"
+                f" is on {self.device.type}. You may experience unexpected behaviors or slower generation."
+                " Please make sure that you have put `input_ids` to the"
+                f" correct device by calling for example input_ids = input_ids.to('{self.device.type}') before"
+                " running `.generate()`.",
+                UserWarning,
+            )
+
+        # 8. prepare distribution pre_processing samplers
+        prepared_logits_processor = self._get_logits_processor(
+            generation_config=generation_config,
+            input_ids_seq_length=input_ids_length,
+            encoder_input_ids=inputs_tensor,
+            prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
+            logits_processor=logits_processor,
+            device=inputs_tensor.device,
+            model_kwargs=model_kwargs,
+            negative_prompt_ids=negative_prompt_ids,
+            negative_prompt_attention_mask=negative_prompt_attention_mask,
+        )
+
+        # 9. prepare stopping criteria
+        prepared_stopping_criteria = self._get_stopping_criteria(
+            generation_config=generation_config, stopping_criteria=stopping_criteria, tokenizer=tokenizer, **kwargs
+        )
+
+        # 10. go into different generation modes
+        if generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
+            # 11. prepare logits warper
+            prepared_logits_warper = (
+                self._get_logits_warper(generation_config, device=input_ids.device)
+                if generation_config.do_sample
+                else None
+            )
+
+            # 12. expand input_ids with `num_return_sequences` additional sequences per batch
+            input_ids, model_kwargs = self._expand_inputs_for_generation(
+                input_ids=input_ids,
+                expand_size=generation_config.num_return_sequences,
+                is_encoder_decoder=self.config.is_encoder_decoder,
+                **model_kwargs,
+            )
+
+            # 13. run sample (it degenerates to greedy search when `generation_config.do_sample=False`)
+            if streaming_unit_gen:
+                return self._sample_streaming_unit(
+                    input_ids,
+                    logits_processor=prepared_logits_processor,
+                    logits_warper=prepared_logits_warper,
+                    stopping_criteria=prepared_stopping_criteria,
+                    generation_config=generation_config,
+                    synced_gpus=synced_gpus,
+                    streamer=streamer,
+                    streamer_unit=streamer_unit,
+                    **model_kwargs,
+                )
+            else:
+                return self._sample(
+                    input_ids,
+                    logits_processor=prepared_logits_processor,
+                    logits_warper=prepared_logits_warper,
+                    stopping_criteria=prepared_stopping_criteria,
+                    generation_config=generation_config,
+                    synced_gpus=synced_gpus,
+                    streamer=streamer,
+                    **model_kwargs,
+                )
+        else:
+            raise NotImplementedError
+
+    def _sample(
+        self,
+        input_ids: torch.LongTensor,
+        logits_processor: LogitsProcessorList,
+        stopping_criteria: StoppingCriteriaList,
+        generation_config: GenerationConfig,
+        synced_gpus: bool,
+        streamer: Optional["BaseStreamer"],
+        logits_warper: Optional[LogitsProcessorList],
+        **model_kwargs,
+    ) -> Union[GenerateNonBeamOutput, torch.LongTensor]:
+        # init values
+        pad_token_id = generation_config._pad_token_tensor
+        output_attentions = generation_config.output_attentions
+        output_hidden_states = generation_config.output_hidden_states
+        output_scores = generation_config.output_scores
+        output_logits = generation_config.output_logits
+        return_dict_in_generate = generation_config.return_dict_in_generate
+        has_eos_stopping_criteria = any(hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
+        do_sample = generation_config.do_sample
+        if do_sample is True and not isinstance(logits_warper, LogitsProcessorList):
+            raise ValueError(
+                "`do_sample` is set to `True`, `logits_warper` must be a `LogitsProcessorList` instance (it is "
+                f"{logits_warper})."
+            )
+
+        # init attention / hidden states / scores tuples
+        scores = () if (return_dict_in_generate and output_scores) else None
+        raw_logits = () if (return_dict_in_generate and output_logits) else None
+        decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
+        cross_attentions = () if (return_dict_in_generate and output_attentions) else None
+        decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
+
+        # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
+        if return_dict_in_generate and self.config.is_encoder_decoder:
+            encoder_attentions = model_kwargs["encoder_outputs"].get("attentions") if output_attentions else None
+            encoder_hidden_states = (
+                model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
+            )
+
+        # keep track of which sequences are already finished
+        batch_size = input_ids.shape[0]
+        this_peer_finished = False
+        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
+        model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+
+        while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
+            # prepare model inputs
+            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+
+            # prepare variable output controls (note: some models won't accept all output controls)
+            model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
+            model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
+
+            # forward pass to get next token
+            outputs = self(**model_inputs, return_dict=True)
+
+            if synced_gpus and this_peer_finished:
+                continue  # don't waste resources running the code we don't need
+
+            # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration
+            # (the clone itself is always small)
+            next_token_logits = outputs.logits[:, -1, :].clone()
+
+            # pre-process distribution
+            next_token_scores = logits_processor(input_ids, next_token_logits)
+            if do_sample:
+                next_token_scores = logits_warper(input_ids, next_token_scores)
+
+            # Store scores, attentions and hidden_states when required
+            if return_dict_in_generate:
+                if output_scores:
+                    scores += (next_token_scores,)
+                if output_logits:
+                    raw_logits += (next_token_logits,)
+                if output_attentions:
+                    decoder_attentions += (
+                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (outputs.attentions,)
+                    )
+                    if self.config.is_encoder_decoder:
+                        cross_attentions += (outputs.cross_attentions,)
+
+                if output_hidden_states:
+                    decoder_hidden_states += (
+                        (outputs.decoder_hidden_states,)
+                        if self.config.is_encoder_decoder
+                        else (outputs.hidden_states,)
+                    )
+
+            # token selection
+            if do_sample:
+                probs = nn.functional.softmax(next_token_scores, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+            else:
+                next_tokens = torch.argmax(next_token_scores, dim=-1)
+            
+            # finished sentences should have their next token be a padding token
+            if has_eos_stopping_criteria:
+                next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
+
+            # update generated ids, model inputs, and length for next step
+            input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+            if streamer is not None:
+                streamer.put(next_tokens.cpu())
+
+            model_kwargs = self._update_model_kwargs_for_generation(
+                outputs,
+                model_kwargs,
+                is_encoder_decoder=self.config.is_encoder_decoder,
+            )
+
+            unfinished_sequences = unfinished_sequences & ~stopping_criteria(input_ids, scores)
+            this_peer_finished = unfinished_sequences.max() == 0
+
+            # This is needed to properly delete outputs.logits which may be very large for first iteration
+            # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
+            del outputs
+
+        if streamer is not None:
+            streamer.end()
+
+        if return_dict_in_generate:
+            if self.config.is_encoder_decoder:
+                return GenerateEncoderDecoderOutput(
+                    sequences=input_ids,
+                    scores=scores,
+                    logits=raw_logits,
+                    encoder_attentions=encoder_attentions,
+                    encoder_hidden_states=encoder_hidden_states,
+                    decoder_attentions=decoder_attentions,
+                    cross_attentions=cross_attentions,
+                    decoder_hidden_states=decoder_hidden_states,
+                    past_key_values=model_kwargs.get("past_key_values"),
+                )
+            else:
+                return GenerateDecoderOnlyOutput(
+                    sequences=input_ids,
+                    scores=scores,
+                    logits=raw_logits,
+                    attentions=decoder_attentions,
+                    hidden_states=decoder_hidden_states,
+                    past_key_values=model_kwargs.get("past_key_values"),
+                )
+        else:
+            return input_ids
+
+    def _sample_streaming_unit(
+        self,
+        input_ids: torch.LongTensor,
+        logits_processor: LogitsProcessorList,
+        stopping_criteria: StoppingCriteriaList,
+        generation_config: GenerationConfig,
+        synced_gpus: bool,
+        streamer: Optional["BaseStreamer"],
+        streamer_unit: Optional["BaseStreamer"],
+        logits_warper: Optional[LogitsProcessorList],
+        **model_kwargs,
+    ) -> Union[GenerateNonBeamOutput, torch.LongTensor]:
+        # init values
+        pad_token_id = generation_config._pad_token_tensor
+        output_attentions = generation_config.output_attentions
+        output_hidden_states = generation_config.output_hidden_states
+        output_scores = generation_config.output_scores
+        output_logits = generation_config.output_logits
+        return_dict_in_generate = generation_config.return_dict_in_generate
+        has_eos_stopping_criteria = any(hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
+        do_sample = generation_config.do_sample
+        if do_sample is True and not isinstance(logits_warper, LogitsProcessorList):
+            raise ValueError(
+                "`do_sample` is set to `True`, `logits_warper` must be a `LogitsProcessorList` instance (it is "
+                f"{logits_warper})."
+            )
+
+        # init attention / hidden states / scores tuples
+        scores = () if (return_dict_in_generate and output_scores) else None
+        raw_logits = () if (return_dict_in_generate and output_logits) else None
+        decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
+        cross_attentions = () if (return_dict_in_generate and output_attentions) else None
+        decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
+
+        # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
+        if return_dict_in_generate and self.config.is_encoder_decoder:
+            encoder_attentions = model_kwargs["encoder_outputs"].get("attentions") if output_attentions else None
+            encoder_hidden_states = (
+                model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
+            )
+
+        # keep track of which sequences are already finished
+        batch_size = input_ids.shape[0]
+        this_peer_finished = False
+        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
+        model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+
+        generated_units = torch.tensor([])
+        while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
+            # prepare model inputs
+            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+
+            # prepare variable output controls (note: some models won't accept all output controls)
+            model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
+            model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
+
+            # forward pass to get next token
+            outputs = self(**model_inputs, return_dict=True)
+
+            if synced_gpus and this_peer_finished:
+                continue  # don't waste resources running the code we don't need
+
+            # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration
+            # (the clone itself is always small)
+            next_token_logits = outputs.logits[:, -1, :].clone()
+
+            # pre-process distribution
+            next_token_scores = logits_processor(input_ids, next_token_logits)
+            if do_sample:
+                next_token_scores = logits_warper(input_ids, next_token_scores)
+
+            # Store scores, attentions and hidden_states when required
+            if return_dict_in_generate:
+                if output_scores:
+                    scores += (next_token_scores,)
+                if output_logits:
+                    raw_logits += (next_token_logits,)
+                if output_attentions:
+                    decoder_attentions += (
+                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (outputs.attentions,)
+                    )
+                    if self.config.is_encoder_decoder:
+                        cross_attentions += (outputs.cross_attentions,)
+
+                if output_hidden_states:
+                    decoder_hidden_states += (
+                        (outputs.decoder_hidden_states,)
+                        if self.config.is_encoder_decoder
+                        else (outputs.hidden_states,)
+                    )
+
+            # token selection
+            if do_sample:
+                probs = nn.functional.softmax(next_token_scores, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+            else:
+                next_tokens = torch.argmax(next_token_scores, dim=-1)
+            
+            # speechgen
+            hidden_states = torch.cat([decoder_hidden_states[0][-1][:, -1:, :]] + [decoder_hidden_states[i][-1] for i in range(1, len(decoder_hidden_states))], dim=1)
+            ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
+            cur_units = ctc_postprocess(ctc_pred, blank=self.model.config.unit_vocab_size)
+            
+            # finished sentences should have their next token be a padding token
+            if has_eos_stopping_criteria:
+                next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
+
+            # update generated ids, model inputs, and length for next step
+            input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+            if streamer is not None:
+                streamer.put(next_tokens.cpu())
+            if streamer_unit is not None:
+                for i in range(len(generated_units), len(cur_units)):
+                    streamer_unit.put(cur_units[i].unsqueeze(0))
+            generated_units = cur_units
+            model_kwargs = self._update_model_kwargs_for_generation(
+                outputs,
+                model_kwargs,
+                is_encoder_decoder=self.config.is_encoder_decoder,
+            )
+
+            unfinished_sequences = unfinished_sequences & ~stopping_criteria(input_ids, scores)
+            this_peer_finished = unfinished_sequences.max() == 0
+
+            # This is needed to properly delete outputs.logits which may be very large for first iteration
+            # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
+            del outputs
+
+        if streamer is not None:
+            streamer.end()
+
+        if return_dict_in_generate:
+            if self.config.is_encoder_decoder:
+                return GenerateEncoderDecoderOutput(
+                    sequences=input_ids,
+                    scores=scores,
+                    logits=raw_logits,
+                    encoder_attentions=encoder_attentions,
+                    encoder_hidden_states=encoder_hidden_states,
+                    decoder_attentions=decoder_attentions,
+                    cross_attentions=cross_attentions,
+                    decoder_hidden_states=decoder_hidden_states,
+                    past_key_values=model_kwargs.get("past_key_values"),
+                )
+            else:
+                return GenerateDecoderOnlyOutput(
+                    sequences=input_ids,
+                    scores=scores,
+                    logits=raw_logits,
+                    attentions=decoder_attentions,
+                    hidden_states=decoder_hidden_states,
+                    past_key_values=model_kwargs.get("past_key_values"),
+                )
+        else:
+            return input_ids
+
+
+    def ctc_postprocess(self, tokens, blank):
+        _toks = tokens.squeeze(0).tolist()
+        deduplicated_toks = [v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]]
+        hyp = torch.tensor([v for v in deduplicated_toks if v != blank])
+        return hyp
+
+
+class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
     config_class = Typhoon2AudioConfig
+    _supports_cache_class = True
 
     def __init__(self, 
         config,
@@ -88,23 +703,23 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
         # 1. Speech Encoder
         # 1.1) Whisper Encoder
         # feature_extractor
-        self.feature_extractor = WhisperFeatureExtractor(feature_size=config.audio_encoder.whisper_extractor_feature_size)
+        self.feature_extractor = WhisperFeatureExtractor(feature_size=config.whisper_extractor_feature_size)
         # whisper encoder
-        self.speech_encoder = WhisperModel(config.audio_encoder.whisper).encoder
-        self.ln_speech = nn.LayerNorm(config.audio_encoder.whisper.d_model)
+        self.speech_encoder = WhisperModel(config.whisper).encoder
+        self.ln_speech = nn.LayerNorm(config.whisper.d_model)
 
         # 1.2) BEATs
-        self.beats = BEATs(config.audio_encoder.beats)
-        self.ln_audio = nn.LayerNorm(config.audio_encoder.beats.encoder_embed_dim)
+        self.beats = BEATs(config.beats)
+        self.ln_audio = nn.LayerNorm(config.beats.encoder_embed_dim)
 
         # 1.3) Speech QFormer
         self.speech_Qformer, self.speech_query_tokens = self.init_speech_Qformer(
-            config.audio_encoder.speech_qformer_token_num,
-            config.audio_encoder.whisper.d_model + config.audio_encoder.beats.encoder_embed_dim,
-            config.audio_encoder.speech_qformer_layer,
+            config.speech_qformer_token_num,
+            config.whisper.d_model + config.beats.encoder_embed_dim,
+            config.speech_qformer_layer,
         )
-        self.second_per_frame = config.audio_encoder.second_per_frame
-        self.second_stride = config.audio_encoder.second_stride
+        self.second_per_frame = config.second_per_frame
+        self.second_stride = config.second_stride
 
         # 2. LLM (e.g., Llama3)
         self.llama_model = AutoModelForCausalLM.from_pretrained(
@@ -123,22 +738,23 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
             self.llama_model.config.hidden_size,
         )
 
-    def forward(self, **kwargs):
-        raise Exception("Direct forward pass is not supported. For training, please refer to the training recipe of Typhoon-Audio.")
+    def init_speech_Qformer(self, num_query_token, speech_width, num_hidden_layers=2):
+        encoder_config = BertConfig()
+        encoder_config.num_hidden_layers = num_hidden_layers
+        encoder_config.encoder_width = speech_width
+        encoder_config.add_cross_attention = True
+        encoder_config.cross_attention_freq = 1
+        encoder_config.query_length = num_query_token
+        Qformer = BertLMHeadModel(config=encoder_config)
+        query_tokens = nn.Parameter(
+            torch.zeros(1, num_query_token, encoder_config.hidden_size),
+        )
+        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
+        return Qformer, query_tokens
 
-    def generate(
+    def encode_speech_only(
         self,
-        audio,
-        prompt,
-        prompt_pattern,
-        max_new_tokens=1024,
-        num_beams=1,
-        do_sample=True,
-        top_p=0.9,
-        repetition_penalty=1.0,
-        length_penalty=1.0,
-        temperature=1.0,
-        streamer=None
+        audio
     ):
         # whisper
         spectrogram = self.feature_extractor(audio, return_tensors="pt", sampling_rate=16000).input_features.to(self.device).to(self.dtype) # [1, 80, 3000]
@@ -179,10 +795,18 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
         )
         speech_embeds = self.speech_llama_proj(query_output.last_hidden_state)
         speech_embeds = speech_embeds.view(B, -1, speech_embeds.size(2)).contiguous()
-        speech_atts = torch.ones(speech_embeds.size()[:-1], dtype=torch.long).to(speech_embeds.device)
-        
-        # "<|start_header_id|>user<|end_header_id|>\n\n<Speech><SpeechHere></Speech> {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        return speech_embeds
+
+    def encode_speech_with_text(
+        self,
+        audio,
+        prompt,
+        prompt_pattern
+    ):
+        speech_embeds = self.encode_speech_only(audio)
+
         embed_tokens = self.llama_model.model.embed_tokens
+        # "<|start_header_id|>user<|end_header_id|>\n\n<Speech><SpeechHere></Speech> {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
         prompt_left, prompts_right = prompt_pattern.format(prompt).split('<SpeechHere>')
         prompt_left_ids = self.llama_tokenizer(
             prompt_left,
@@ -207,7 +831,81 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
 
         embeds = torch.cat([bos_embeds, prompt_left_embeds, speech_embeds, prompt_right_embeds], dim=1)
         atts = torch.ones(embeds.size()[:-1], dtype=torch.long).to(embeds.device)
+        return embeds, atts
 
+    def forward(
+        self, 
+        audio,
+        prompt,
+        prompt_pattern,
+        labels: Optional[torch.LongTensor] = None,
+        return_dict: Optional[bool] = None,
+        **kwargs
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        
+        # TODO: support batch_size > 1
+        embeds, atts = self.encode_speech_with_text(audio, prompt, prompt_pattern)
+        # forward
+        outputs = self.llama_model.forward(
+            inputs_embeds=embeds,
+            attention_mask=atts,
+            labels=labels,
+            return_dict=return_dict
+        )
+        return outputs
+
+    # def forward(
+    #     self,
+    #     input_ids: torch.LongTensor = None,
+    #     attention_mask: Optional[torch.Tensor] = None,
+    #     position_ids: Optional[torch.LongTensor] = None,
+    #     past_key_values: Optional[List[torch.FloatTensor]] = None,
+    #     inputs_embeds: Optional[torch.FloatTensor] = None,
+    #     labels: Optional[torch.LongTensor] = None,
+    #     use_cache: Optional[bool] = None,
+    #     output_attentions: Optional[bool] = None,
+    #     output_hidden_states: Optional[bool] = None,
+    #     return_dict: Optional[bool] = None,
+    #     cache_position: Optional[torch.LongTensor] = None,
+
+    # ) -> Union[Tuple, CausalLMOutputWithPast]:
+    #     llama_output = self.llama_model.forward(
+    #         input_ids=input_ids,
+    #         attention_mask=attention_mask,
+    #         position_ids=position_ids,
+    #         past_key_values=past_key_values,
+    #         inputs_embeds=inputs_embeds,
+    #         labels=labels,
+    #         use_cache=use_cache,
+    #         output_attentions=output_attentions,
+    #         output_hidden_states=True,
+    #         return_dict=return_dict,
+    #         cache_position=cache_position,
+    #     )
+    #     loss = llama_output.loss
+    #     return CausalLMOutputWithPast(
+    #         loss=loss,
+    #         logits=llama_output.logits,
+    #         past_key_values=llama_output.past_key_values,
+    #         hidden_states=llama_output.hidden_states,
+    #         attentions=llama_output.attentions
+    #     )
+
+    def generate(
+        self,
+        audio,
+        prompt,
+        prompt_pattern,
+        max_new_tokens=1024,
+        num_beams=1,
+        do_sample=True,
+        top_p=0.9,
+        repetition_penalty=1.0,
+        length_penalty=1.0,
+        temperature=1.0,
+        streamer=None
+    ) -> str:
+        embeds, atts = self.encode_speech_with_text(audio, prompt, prompt_pattern)
         # generate
         output = self.llama_model.generate(
             inputs_embeds=embeds,
@@ -227,74 +925,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
         output_text = self.llama_tokenizer.batch_decode(output, add_special_tokens=False, skip_special_tokens=True)
         return output_text[0]
 
-    def init_speech_Qformer(self, num_query_token, speech_width, num_hidden_layers=2):
-        encoder_config = BertConfig()
-        encoder_config.num_hidden_layers = num_hidden_layers
-        encoder_config.encoder_width = speech_width
-        encoder_config.add_cross_attention = True
-        encoder_config.cross_attention_freq = 1
-        encoder_config.query_length = num_query_token
-        Qformer = BertLMHeadModel(config=encoder_config)
-        query_tokens = nn.Parameter(
-            torch.zeros(1, num_query_token, encoder_config.hidden_size),
-        )
-        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
-        return Qformer, query_tokens
-
-
-    # ------------------------------------------------------------------------------------------- #
+    # ------------------------------------------------------------------------------- #
     # November 2024 -- multi-turn
-    def process_wav(self, wav_path):
-        # read wav
-        wav, sr = sf.read(wav_path)
-        if len(wav.shape) == 2:
-            wav = wav[:, 0]
-        if len(wav) > 30 * sr:
-            wav = wav[: 30 * sr]
-        if sr != 16000:
-            wav = librosa.resample(wav, orig_sr=sr, target_sr=16000, res_type="fft")
-        
-        # whisper
-        spectrogram = self.feature_extractor(wav, return_tensors="pt", sampling_rate=16000).input_features.to(self.device).to(self.torch_dtype) # [1, 80, 3000]
-        speech_embeds = self.speech_encoder(spectrogram, return_dict=True).last_hidden_state
-
-        # beats
-        raw_wav = torch.from_numpy(wav).to(self.device).unsqueeze(0)
-        audio_padding_mask = torch.zeros(raw_wav.shape, device=self.device).bool()
-        audio_embeds, _ = self.beats.extract_features(raw_wav, padding_mask=audio_padding_mask, feature_only=True, torch_dtype=self.torch_dtype)
-
-        # auditory embeds
-        speech_embeds = self.ln_speech(speech_embeds)
-        audio_embeds = self.ln_audio(audio_embeds)
-        audio_embeds = F.pad(audio_embeds, (0, 0, 0, speech_embeds.size(1) - audio_embeds.size(1)))
-        speech_embeds = torch.cat([speech_embeds, audio_embeds], dim=-1)
-
-        # split frames
-        B, T, C = speech_embeds.shape
-        kernel = round(T * self.second_per_frame / 30.0)
-        stride = round(T * self.second_stride / 30.0)
-        kernel = (1, kernel)
-        stride = (1, stride)
-        speech_embeds_tr = speech_embeds.transpose(1, 2).unsqueeze(2)
-        speech_embeds_overlap = F.unfold(speech_embeds_tr, kernel_size=kernel, dilation=1, padding=0, stride=stride)
-        _, _, L = speech_embeds_overlap.shape
-        speech_embeds_overlap = speech_embeds_overlap.view(B, -1, kernel[1], L)
-        speech_embeds_overlap = torch.permute(speech_embeds_overlap, [0, 3, 2, 1])
-        speech_embeds = speech_embeds_overlap.reshape(-1, kernel[1], C)
-        speech_atts = torch.ones(speech_embeds.size()[:-1], dtype=torch.long, device=speech_embeds.device)
-
-        # Qformer
-        query_tokens = self.speech_query_tokens.expand(speech_embeds.shape[0], -1, -1)
-        query_output = self.speech_Qformer.bert(
-            query_embeds=query_tokens,
-            encoder_hidden_states=speech_embeds,
-            encoder_attention_mask=speech_atts,
-            return_dict=True,
-        )
-        speech_embeds = self.speech_llama_proj(query_output.last_hidden_state)
-        speech_embeds = speech_embeds.view(B, -1, speech_embeds.size(2)).contiguous()
-        return speech_embeds
-
     def init_multiturn(
         self, 
         system_prompt="<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant named ไต้ฝุ่น. You always answer in Thai.<|eot_id|>",
@@ -403,26 +1035,349 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel):
 
         return output_text[0]
 
-class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGeneration):
+
+
+class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGeneration, GenerationWithCTC):
     config_class = Typhoon2AudioConfig
-    def __init__(self,
-        config,
-    ):
+
+    def __init__(self, config):
         super().__init__(config)
         """
         Initialize 
         1) speech decoder (llm output representation -> speech unit)
         2) unit vocoder (speech unit -> wav)
         """
-        self.speech_generator = SpeechGeneratorCTC(config.audio_decoder)
+        self.pretraining_tp = config.pretraining_tp
+        self.speech_generator = SpeechGeneratorCTC(config)
 
+    def init_vocoder(self, config=None):
+        if config is None:
+            config = self.config
         path_to_vocoder_checkpoint = hf_hub_download(
-            repo_id=config.audio_decoder.vocoder_path['repo_id'], 
-            filename=config.audio_decoder.vocoder_path['filename']
+            repo_id=config.vocoder_path['repo_id'], 
+            filename=config.vocoder_path['filename']
         )
-        self.vocoder = CodeHiFiGANVocoder(path_to_vocoder_checkpoint, config.audio_decoder.vocoder_config)
+        self.vocoder = CodeHiFiGANVocoder(path_to_vocoder_checkpoint, config.vocoder_config)
+        self.vocoder.to(self.device)
 
-# --------------------------------------------------------------------------------------------------- #
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+
+        **kwargs
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+
+        llama_output = self.llama_model.forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            labels=labels,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=True,
+            return_dict=return_dict,
+        )
+        loss = llama_output.loss
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=llama_output.logits,
+            past_key_values=llama_output.past_key_values,
+            hidden_states=llama_output.hidden_states,
+            attentions=llama_output.attentions
+        )
+
+    @torch.no_grad()
+    def generate(
+        self,
+        # ----------------- #
+        inputs_embeds=None,
+        attention_mask=None,
+        output_hidden_states=True,
+        return_dict_in_generate=True,
+        streaming_unit_gen=False,
+        max_length=8000,
+        # ----------------- #
+        **kwargs,
+    ) -> Union[GenerateOutput, torch.LongTensor]:
+        
+        if ("audio" in kwargs and "prompt" in kwargs and "prompt_pattern" in kwargs) and inputs_embeds is None:
+            audio = kwargs["audio"]
+            prompt = kwargs["prompt"]
+            prompt_pattern = kwargs["prompt_pattern"]
+            inputs_embeds, attention_mask = self.encode_speech_with_text(audio, prompt, prompt_pattern)
+
+        outputs = GenerationWithCTC.generate(
+            self,
+            # position_ids=position_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            output_hidden_states=output_hidden_states,
+            return_dict_in_generate=return_dict_in_generate,
+            streaming_unit_gen=streaming_unit_gen,
+            max_length=max_length, # typhoon2 (llama3.1) will set this to 20 somehow otherwise
+
+            # ------------------- #
+            bos_token_id=128000,
+            eos_token_id=[128001, 128008, 128009]
+
+        )
+
+        hidden_states = outputs['hidden_states']
+        hidden_states = torch.cat([hidden_states[0][-1][:, -1:, :]] + [hidden_states[i][-1] for i in range(1, len(hidden_states))], dim=1)
+        ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
+
+        # processing
+        output_ids, output_units = outputs.sequences, ctc_pred
+
+        # text
+        output_text = self.llama_tokenizer.batch_decode(output_ids, add_special_tokens=False, skip_special_tokens=True)[0]
+        
+        # wav
+        output_units = self.ctc_postprocess(output_units, blank=self.config.unit_vocab_size)
+        output_units = [(list(map(int, output_units.strip().split())))]
+        
+        # vocoder
+        if hasattr(self, 'vocoder'):
+            output_units_tensor = torch.tensor(output_units, dtype=torch.int64, device=self.device)
+            output_audio = self.vocoder({"code": output_units_tensor}, True)
+            output_audio = output_audio.detach().cpu().numpy()
+        else:
+            output_audio = None
+        output_audio = {
+            "array": output_audio, 
+            "sampling_rate": self.config.vocoder_config['sampling_rate']
+        }
+        return {
+            "text": output_text,
+            "unit": output_units,
+            "audio": output_audio
+        }
+
+    def ctc_postprocess(self, tokens, blank):
+        _toks = tokens.squeeze(0).tolist()
+        deduplicated_toks = [v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]]
+        hyp = [v for v in deduplicated_toks if v != blank]
+        hyp = " ".join(list(map(str, hyp)))
+        return hyp
+
+
+    def prepare_inputs_for_generation(
+        self, 
+        input_ids, 
+        past_key_values=None,
+        inputs_embeds=None, 
+        **kwargs
+    ):
+        inputs = self.prepare_inputs_for_generation_base(
+            input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
+        )
+        return inputs
+
+    def prepare_inputs_for_generation_base(
+        self,
+        input_ids: torch.LongTensor,
+        past_key_values: Optional[Cache] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ):
+        # taken from https://github.com/huggingface/transformers/blob/main/src/transformers/generation/utils.py
+        """
+        Prepare the model inputs for generation. In includes operations like computing the 4D attention mask or
+        slicing inputs given the existing cache.
+
+        See the forward pass in the model documentation for expected arguments (different models might have different
+        requirements for e.g. `past_key_values`). This function should work as is for most LLMs.
+        """
+
+        # 1. Handle BC:
+        model_inputs = {}
+        # - some models don't have `Cache` support (which implies they don't expect `cache_position` in `forward`)
+        if self._supports_cache_class:
+            model_inputs["cache_position"] = cache_position
+        # - `cache_position` was not a mandatory input in `prepare_inputs_for_generation` for those models, and this
+        #   function may be called outside of `generate`. Handle most use cases by creating `cache_position` on the fly
+        #   (this alternative is not as robust as calling `generate` and letting it create `cache_position`)
+        elif cache_position is None:
+            past_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+            cache_position = torch.arange(past_length, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+
+        # 2. Generic cache-dependent input preparation
+        # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
+        # Exception 1: when passing input_embeds, input_ids may be missing entries
+        # Exception 2: some generation methods do special slicing of input_ids, so we don't need to do it here
+        # Exception 3: with synced GPUs cache_position may go out of bounds, but we only want dummy token in that case.
+        #              (we can't check exception 3 while compiling)
+        if past_key_values is not None:
+            model_inputs["past_key_values"] = past_key_values
+            if (
+                inputs_embeds is not None  # Exception 1
+                or (is_torchdynamo_compiling() or cache_position[-1] >= input_ids.shape[1])  # Exception 3
+            ):
+                input_ids = input_ids[:, -cache_position.shape[0] :]
+            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                input_ids = input_ids[:, cache_position]
+
+        # 3. Prepare base model inputs
+        input_ids_key = "decoder_input_ids" if self.config.is_encoder_decoder else "input_ids"
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if not self.config.is_encoder_decoder:
+            if inputs_embeds is not None and cache_position[0] == 0:
+                model_inputs[input_ids_key] = None
+                model_inputs["inputs_embeds"] = inputs_embeds
+            else:
+                # `clone` calls in this function ensure a consistent stride. See #32227
+                model_inputs[input_ids_key] = input_ids.clone(memory_format=torch.contiguous_format)
+                model_inputs["inputs_embeds"] = None
+        else:
+            model_inputs[input_ids_key] = input_ids.clone(memory_format=torch.contiguous_format)
+
+        # 4. Create missing `position_ids` on the fly
+        if (
+            attention_mask is not None
+            and kwargs.get("position_ids") is None
+            and "position_ids" in set(inspect.signature(self.forward).parameters.keys())
+        ):
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            kwargs["position_ids"] = position_ids  # placed in kwargs for further processing (see below)
+
+        # 5. Slice model inputs if it's an input that should have the same length as `input_ids`
+        for model_input_name in ["position_ids", "token_type_ids"]:
+            model_input = kwargs.get(model_input_name)
+            if model_input is not None:
+                if past_key_values is not None:
+                    current_input_length = (
+                        model_inputs["inputs_embeds"].shape[1]
+                        if model_inputs["inputs_embeds"] is not None
+                        else model_inputs[input_ids_key].shape[1]
+                    )
+                    model_input = model_input[:, -current_input_length:]
+                    model_input = model_input.clone(memory_format=torch.contiguous_format)
+                model_inputs[model_input_name] = model_input
+
+        # 6. Create 4D attention mask is we are using a `StaticCache` (important for performant compiled forward pass)
+        if isinstance(past_key_values, StaticCache) and attention_mask.ndim == 2:
+            if model_inputs["inputs_embeds"] is not None:
+                batch_size, sequence_length, _ = model_inputs["inputs_embeds"].shape
+                device = model_inputs["inputs_embeds"].device
+            else:
+                batch_size, sequence_length = model_inputs[input_ids_key].shape
+                device = model_inputs[input_ids_key].device
+
+            # Create the causal mask with fixed shape in advance, to reduce recompilations. If the function to create
+            # the 4D causal mask exists, it should be present in the base model (XXXModel class).
+            base_model = getattr(self, self.base_model_prefix, None)
+            if base_model is None:
+                causal_mask_creation_function = getattr(
+                    self, "_prepare_4d_causal_attention_mask_with_cache_position", None
+                )
+            else:
+                causal_mask_creation_function = getattr(
+                    base_model, "_prepare_4d_causal_attention_mask_with_cache_position", None
+                )
+            if causal_mask_creation_function is None:
+                logger.warning_once(
+                    f"{self.__class__.__name__} has no `_prepare_4d_causal_attention_mask_with_cache_position` method "
+                    "defined in its base modeling class. Compiled forward passes will be sub-optimal. If you're "
+                    "writing code, see Llama for an example implementation. If you're a user, please report this "
+                    "issue on GitHub."
+                )
+            else:
+                attention_mask = causal_mask_creation_function(
+                    attention_mask,
+                    sequence_length=sequence_length,
+                    target_length=past_key_values.get_max_cache_shape(),
+                    dtype=self.dtype,
+                    device=device,
+                    cache_position=cache_position,
+                    batch_size=batch_size,
+                    config=self.config,
+                    past_key_values=past_key_values,
+                )
+        if attention_mask is not None:
+            model_inputs["attention_mask"] = attention_mask
+
+        # 7. Forward ALL kwargs that are uninitialized (e.g. `use_cache`).
+        for key, value in kwargs.items():
+            if key not in model_inputs:
+                model_inputs[key] = value
+
+        # 8. Remove unexpected `generate` inputs (TODO @joao: fix trainer and examples)
+        model_inputs.pop("labels", None)
+        return model_inputs
+
+
+    def _get_logits_warper(
+        self,
+        generation_config: GenerationConfig,
+        device: str,
+    ) -> LogitsProcessorList:
+        """
+        This class returns a [`LogitsProcessorList`] list object that contains all relevant [`LogitsWarper`] instances
+        used for multinomial sampling.
+        """
+
+        # instantiate warpers list
+        warpers = LogitsProcessorList()
+
+        # In beam methods, we need to keep at least one non-eos token to explore continuations that might have a
+        # better score (i.e. keep len(list(generation_config._eos_token_tensor)) + 1)
+        if generation_config.num_beams > 1:
+            if isinstance(generation_config._eos_token_tensor, list):
+                min_tokens_to_keep = len(generation_config._eos_token_tensor) + 1
+            elif isinstance(generation_config._eos_token_tensor, torch.Tensor):
+                min_tokens_to_keep = generation_config._eos_token_tensor.shape[0] + 1
+            else:
+                min_tokens_to_keep = 2
+        else:
+            min_tokens_to_keep = 1
+
+        # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
+        # all samplers can be found in `generation_utils_samplers.py`
+        if generation_config.temperature is not None and generation_config.temperature != 1.0:
+            warpers.append(TemperatureLogitsWarper(generation_config.temperature))
+        if generation_config.top_k is not None and generation_config.top_k != 0:
+            warpers.append(TopKLogitsWarper(top_k=generation_config.top_k, min_tokens_to_keep=min_tokens_to_keep))
+        if generation_config.top_p is not None and generation_config.top_p < 1.0:
+            warpers.append(TopPLogitsWarper(top_p=generation_config.top_p, min_tokens_to_keep=min_tokens_to_keep))
+        if generation_config.min_p is not None:
+            # Applied after temperature scaling (see https://github.com/ggerganov/llama.cpp/pull/3841#issuecomment-2073826084)
+            warpers.append(MinPLogitsWarper(min_p=generation_config.min_p, min_tokens_to_keep=min_tokens_to_keep))
+        if generation_config.typical_p is not None and generation_config.typical_p < 1.0:
+            warpers.append(
+                TypicalLogitsWarper(mass=generation_config.typical_p, min_tokens_to_keep=min_tokens_to_keep)
+            )
+        if generation_config.epsilon_cutoff is not None and 0.0 < generation_config.epsilon_cutoff < 1.0:
+            warpers.append(
+                EpsilonLogitsWarper(epsilon=generation_config.epsilon_cutoff, min_tokens_to_keep=min_tokens_to_keep)
+            )
+        if generation_config.eta_cutoff is not None and 0.0 < generation_config.eta_cutoff < 1.0:
+            warpers.append(
+                EtaLogitsWarper(
+                    epsilon=generation_config.eta_cutoff, min_tokens_to_keep=min_tokens_to_keep, device=device
+                )
+            )
+        # `LogitNormalization` should always be the last logit processor, when present
+        if generation_config.renormalize_logits is True:
+            warpers.append(LogitNormalization())
+        return warpers
+
+#------------------------------------------------------------------------------------------ #
 # Speech Decoder Componnt
 class SpeechGeneratorCTC(nn.Module):
     def __init__(self, config):
@@ -451,8 +1406,8 @@ class SpeechGeneratorCTC(nn.Module):
             tgt_lens = tgt_units.ne(self.speech_decoder_ignore_index).long().sum(dim=-1)
             up_lens = torch.max(up_lens, tgt_lens)
         reps = torch.nn.utils.rnn.pad_sequence(reps, batch_first=True)
-        padding_mask = _lengths_to_padding_mask(up_lens)
-        mapped_inputs = _uniform_assignment(src_lens, up_lens).masked_fill(
+        padding_mask = self._lengths_to_padding_mask(up_lens)
+        mapped_inputs = self._uniform_assignment(src_lens, up_lens).masked_fill(
             padding_mask, 0
         )
         copied_reps = torch.gather(
@@ -483,7 +1438,7 @@ class SpeechGeneratorCTC(nn.Module):
         ctc_lprobs = F.log_softmax(ctc_logits.float(), dim=-1, dtype=torch.float32)
         ctc_lens = attention_mask.long().sum(dim=-1)
         ctc_tgt_lens = tgt_units.ne(self.speech_decoder_ignore_index).long().sum(dim=-1)
-        ctc_tgt_mask = ~_lengths_to_padding_mask(ctc_tgt_lens)
+        ctc_tgt_mask = ~self._lengths_to_padding_mask(ctc_tgt_lens)
         ctc_tgt_flat = tgt_units.masked_select(ctc_tgt_mask)
         ctc_loss = F.ctc_loss(
             ctc_lprobs.transpose(0, 1),
@@ -518,14 +1473,13 @@ class SpeechGeneratorCTC(nn.Module):
         mask = mask.expand(bsz, -1) >= lens.view(bsz, 1).expand(-1, max_lens)
         return mask
 
-
     def _uniform_assignment(self, src_lens, tgt_lens):
         tgt_indices = torch.arange(torch.max(tgt_lens)).expand(len(tgt_lens), -1).to(tgt_lens.device)
         ratio = tgt_lens / src_lens
         index_t = (tgt_indices / ratio.view(-1, 1)).long()
         return index_t
 
-# --------------------------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------------------- #
 
 
 class BertEmbeddings(nn.Module):
