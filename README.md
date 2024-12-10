@@ -1,6 +1,29 @@
 # Typhoon2-Audio
 The repository of Typhoon2-Audio, Thai audio-language model that supports speech-in and speech-out
 
+## Usage
+
+```python
+# load model
+from transformers import AutoModel
+model = AutoModel.from_pretrained(
+    "save_weights/llama3.1-typhoon2-audio-8b-instruct-241210/",
+    torch_dtype=torch.float16, 
+    trust_remote_code=True
+)
+
+# inference
+prompt_pattern="<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant named ไต้ฝุ่น.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n<Speech><SpeechHere></Speech> {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+prompt="Respond conversationally to the speech provided.",
+audio, sr = sf.read("speech_input.wav")
+x = model.generate(audio=audio, prompt=prompt, prompt_pattern=prompt_pattern)
+# x => x['text'] (text), x['audio'] (numpy array)
+
+# TTS functionality
+y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a language model specialized in Thai")
+# y => numpy array
+```
+
 ## To Do
 - [x] Merge LoRA weights
 - [x] Integrate Encoder + LLM + Generator + Vocoder
@@ -15,21 +38,21 @@ The repository of Typhoon2-Audio, Thai audio-language model that supports speech
 - [ ] Allow streaming for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [ ] Allow multi-turn for `.generate()` for `Typhoon2AudioForConditionalGeneration`
 - [ ] Allow multi-turn for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
+- [x] Add TTS functionality to `Typhoon2Audio2AudioForConditionalGeneration`
 - [ ] Write doc & method string
 - [ ] Allow flash_attention for LLM
 - [ ] Allow `device_map="auto"`
-- [ ] Make the code self-contained (LLM)
-- [ ] Make the code self-contained (Vocoder)
+- [ ] Make the code self-contained (LLM) -- tried but initialization is very slow
+- [x] Make the code self-contained (Vocoder) -- done but requires import fairseq
+
+## Build a model (only works locally)
+```
+python local_build.py
+```
 
 ## To test locally
 ```
 python test_load_model.py
-python test_generation.py
-```
-```
-# to test AutoModel
-cp typhoon2_audio/configuration_typhoon2audio.py save_weights/typhoon2-audio-241208/.
-cp typhoon2_audio/modeling_typhoon2audio.py save_weights/typhoon2-audio-241208/.
-cp typhoon2_audio/configuration_typhoon2audio.py /cache/.cache/huggingface/modules/transformers_modules/.
-cp typhoon2_audio/modeling_typhoon2audio.py /cache/.cache/huggingface/modules/transformers_modules/.
+python test_generate.py
+python test_tts.py
 ```

@@ -32,14 +32,19 @@ lora_ckpt_dict = torch.load("/workspace/typhoon-audio-salmonn/outputs/typhoon_au
 model.load_state_dict(lora_ckpt_dict, strict=False)
 model.llama_model = model.llama_model.merge_and_unload()
 
-print("Load Generator")
 # load speech decoder
+print("Load Generator")
 decoder_ckpt_dict = torch.load("/workspace/exp-punpun/omni-trainer/runs/typhoon-audio-sdec-exp8.5/checkpoint-38000/speech_decoder_step_38000.pth")
 model.speech_generator.load_state_dict(decoder_ckpt_dict)
 
 model.eval()
 model.half() # convert to float16
 
+# initialize & load vocoder
+print("Load Unit Vocoder")
+model.init_vocoder(
+    checkpoint_path="/workspace3/exp-boom/unit-vocoder/unit-vocoder-trainer/checkpoints/gcp_vocoder_v1/g_00206600"
+)
 
 print("registering: Typhoon2-Audio")
 Typhoon2AudioConfig.register_for_auto_class()
@@ -47,9 +52,9 @@ Typhoon2Audio2AudioForConditionalGeneration.register_for_auto_class("AutoModel")
 
 print("saving: Typhoon2-Audio")
 # Save Local
-model.save_pretrained("./save_weights/typhoon2-audio-241208", safe_serialization=False)
+model.save_pretrained("./save_weights/llama3.1-typhoon2-audio-8b-instruct-241210", safe_serialization=False)
 
 # Upload to HF
-# model.push_to_hub("potsawee/typhoon2-audio-241208", safe_serialization=False)
+model.push_to_hub("scb10x/llama3.1-typhoon2-audio-8b-instruct-241210", safe_serialization=False)
 
 print("built: Typhoon2-Audio")

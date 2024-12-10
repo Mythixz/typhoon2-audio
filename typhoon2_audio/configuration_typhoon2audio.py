@@ -1,4 +1,4 @@
-from transformers import PretrainedConfig, WhisperConfig, LlamaConfig
+from transformers import PretrainedConfig, WhisperConfig
 
 class BEATsConfig(PretrainedConfig):
     def __init__(self, cfg=None):

@@ -14,6 +14,7 @@ from torch import Tensor, device, nn
 import numpy as np
 from transformers import (
     WhisperFeatureExtractor,
+    WhisperConfig,
     WhisperModel,
     PreTrainedModel,
     AutoTokenizer,
@@ -42,7 +43,7 @@ from transformers.generation.utils import (
 )
 
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from .configuration_typhoon2audio import Typhoon2AudioConfig
+from .configuration_typhoon2audio import Typhoon2AudioConfig, BEATsConfig
 # ---------------------------------------------------- #
 # QFormer: https://github.com/huggingface/transformers/blob/v4.15.0/src/transformers/models/bert
 import math
@@ -76,10 +77,10 @@ except ImportError:
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------- #
 # Speech Decoder
-from fairseq.models.text_to_speech.vocoder import CodeHiFiGANVocoder
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
-from huggingface_hub import hf_hub_download
 # Unit Vocoder
+from fairseq.models import BaseFairseqModel
+from fairseq.models.text_to_speech.codehifigan import CodeGenerator as CodeHiFiGANModel
 # ---------------------------------------------------------- #
 
 
@@ -727,10 +728,14 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         self.feature_extractor = WhisperFeatureExtractor(
             feature_size=config.whisper_extractor_feature_size)
         # whisper encoder
+        if isinstance(config.whisper, dict):
+            config.whisper = WhisperConfig(**config.whisper)
         self.speech_encoder = WhisperModel(config.whisper).encoder
         self.ln_speech = nn.LayerNorm(config.whisper.d_model)
 
         # 1.2) BEATs
+        if isinstance(config.beats, dict):
+            config.beats = BEATsConfig(config.beats)
         self.beats = BEATs(config.beats)
         self.ln_audio = nn.LayerNorm(config.beats.encoder_embed_dim)
 
@@ -1092,16 +1097,17 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         """
         self.pretraining_tp = config.pretraining_tp
         self.speech_generator = SpeechGeneratorCTC(config)
+        self.init_vocoder(config)
 
-    def init_vocoder(self, config=None):
+    def init_vocoder(self, config=None, checkpoint_path=None):
+        # separate vocoder initialization as it is supposed to be float32
+        # other parts should be in float16
         if config is None:
             config = self.config
-        path_to_vocoder_checkpoint = hf_hub_download(
-            repo_id=config.vocoder_path['repo_id'],
-            filename=config.vocoder_path['filename']
-        )
         self.vocoder = CodeHiFiGANVocoder(
-            path_to_vocoder_checkpoint, config.vocoder_config)
+            model_cfg=config.vocoder_config,
+            checkpoint_path=checkpoint_path
+        )
         self.vocoder.to(self.device)
 
     def forward(
@@ -1246,18 +1252,6 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         return hyp
 
     def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        inputs_embeds=None,
-        **kwargs
-    ):
-        inputs = self.prepare_inputs_for_generation_base(
-            input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
-        )
-        return inputs
-
-    def prepare_inputs_for_generation_base(
         self,
         input_ids: torch.LongTensor,
         past_key_values: Optional[Cache] = None,
@@ -1464,7 +1458,6 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
 # ------------------------------------------------------------------------------------------ #
 # Speech Decoder Componnt
 
-
 class SpeechGeneratorCTC(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -1576,6 +1569,48 @@ class SpeechGeneratorCTC(nn.Module):
         ratio = tgt_lens / src_lens
         index_t = (tgt_indices / ratio.view(-1, 1)).long()
         return index_t
+
+# Code HiFiGAN
+# https://github.com/facebookresearch/fairseq/blob/main/fairseq/models/text_to_speech/vocoder.py
+
+class CodeHiFiGANVocoder(BaseFairseqModel):
+    def __init__(
+        self, 
+        model_cfg: Dict[str, str], 
+        checkpoint_path: str = None,
+        fp16: bool = False
+    ) -> None:
+        super().__init__()
+        self.model = CodeHiFiGANModel(model_cfg)
+        if checkpoint_path is not None:
+            self.load_checkpoint(checkpoint_path)
+        self.model.eval()
+        if fp16:
+            self.model.half()
+        self.model.remove_weight_norm()
+        logger.info(f"initialized CodeHiFiGAN checkpoint")
+
+    def load_checkpoint(self, checkpoint_path: str) -> None:
+        if torch.cuda.is_available():
+            state_dict = torch.load(checkpoint_path)
+        else:
+            state_dict = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+        self.model.load_state_dict(state_dict["generator"])
+        logger.info(f"loaded CodeHiFiGAN checkpoint from {checkpoint_path}")
+
+    def forward(self, x: Dict[str, torch.Tensor], dur_prediction=False) -> torch.Tensor:
+        assert "code" in x
+        x["dur_prediction"] = dur_prediction
+
+        # remove invalid code
+        mask = x["code"] >= 0
+        x["code"] = x["code"][mask].unsqueeze(dim=0)
+        if "f0" in x:
+            f0_up_ratio = x["f0"].size(1) // x["code"].size(1)
+            mask = mask.unsqueeze(2).repeat(1, 1, f0_up_ratio).view(-1, x["f0"].size(1))
+            x["f0"] = x["f0"][mask].unsqueeze(dim=0)
+
+        return self.model(**x).detach().squeeze()
 
 # ---------------------------------------------------------------------------------------- #
 
