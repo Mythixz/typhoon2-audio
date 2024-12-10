@@ -5,21 +5,19 @@ Some of the code is adapted from:
 Please follow the copyright of the original projects. 
 """
 
-# ---------------------------------------------------- # 
+# ---------------------------------------------------- #
+import inspect
+import copy
 import torch
-from torch import Tensor, device, dtype, nn
 import torch.nn.functional as F
-import random
+from torch import Tensor, device, nn
 import numpy as np
 from transformers import (
-    AutoConfig,
     WhisperFeatureExtractor,
     WhisperModel,
     PreTrainedModel,
-    GenerationMixin,
-    AutoTokenizer, 
-    AutoModelForCausalLM,
-    LlamaForCausalLM
+    AutoTokenizer,
+    AutoModelForCausalLM
 )
 from transformers.cache_utils import Cache, StaticCache
 from transformers.generation.utils import (
@@ -27,7 +25,7 @@ from transformers.generation.utils import (
     GenerationMode,
     LogitsProcessorList,
     StoppingCriteriaList,
-    GenerateOutput, 
+    GenerateOutput,
     GenerationMixin,
     GenerateEncoderDecoderOutput,
     GenerateDecoderOnlyOutput,
@@ -40,45 +38,32 @@ from transformers.generation.utils import (
     QuantizedCacheConfig,
     is_quanto_available,
     DynamicCache,
-    EncoderDecoderCache,
-    logging
+    EncoderDecoderCache
 )
 
 from transformers.modeling_outputs import CausalLMOutputWithPast
-import soundfile as sf
 from .configuration_typhoon2audio import Typhoon2AudioConfig
-# ---------------------------------------------------- # 
+# ---------------------------------------------------- #
 # QFormer: https://github.com/huggingface/transformers/blob/v4.15.0/src/transformers/models/bert
 import math
-import os
 import warnings
-from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, Union, Callable, List
+from typing import Optional, Tuple, Dict, Union, Callable, List
 import torch.utils.checkpoint
 from torch.nn import CrossEntropyLoss
 from transformers.activations import ACT2FN
-from transformers.file_utils import (
-    ModelOutput,
-)
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
-    MaskedLMOutput,
-    MultipleChoiceModelOutput,
-    NextSentencePredictorOutput,
-    QuestionAnsweringModelOutput,
-    SequenceClassifierOutput,
-    TokenClassifierOutput,
+    MaskedLMOutput
 )
 from transformers.modeling_utils import (
-    PreTrainedModel,
     apply_chunking_to_forward,
     find_pruneable_heads_and_indices,
     prune_linear_layer,
 )
 from transformers.models.bert.configuration_bert import BertConfig
-# ---------------------------------------------------------- # 
+# ---------------------------------------------------------- #
 # BEATs:  https://github.com/microsoft/unilm/tree/master/beats
 from torch.nn import LayerNorm, Parameter
 import torch.distributed as distributed
@@ -88,19 +73,15 @@ try:
     from einops import rearrange, repeat
 except ImportError:
     pass
-
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------- # 
+# ---------------------------------------------------------- #
 # Speech Decoder
-import copy
-import inspect
-from huggingface_hub import hf_hub_download
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer
-from transformers import LlamaConfig
-# Unit Vocoder
 from fairseq.models.text_to_speech.vocoder import CodeHiFiGANVocoder
-# ---------------------------------------------------------- # 
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+from huggingface_hub import hf_hub_download
+# Unit Vocoder
+# ---------------------------------------------------------- #
+
 
 class GenerationWithCTC(GenerationMixin):
 
@@ -111,20 +92,23 @@ class GenerationWithCTC(GenerationMixin):
         generation_config: Optional[GenerationConfig] = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
-        prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
+        prefix_allowed_tokens_fn: Optional[Callable[[
+            int, torch.Tensor], List[int]]] = None,
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
         streamer: Optional["BaseStreamer"] = None,
         streamer_unit: Optional["BaseStreamer"] = None,
-        streaming_unit_gen = False,
+        streaming_unit_gen=False,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
         self._validate_model_class()
-        tokenizer = kwargs.pop("tokenizer", None)  # Pull this out first, we only use it for stopping criteria
-        generation_config, model_kwargs = self._prepare_generation_config(generation_config, **kwargs)
+        # Pull this out first, we only use it for stopping criteria
+        tokenizer = kwargs.pop("tokenizer", None)
+        generation_config, model_kwargs = self._prepare_generation_config(
+            generation_config, **kwargs)
 
         self._validate_model_kwargs(model_kwargs.copy())
         self._validate_assistant(assistant_model)
@@ -139,9 +123,11 @@ class GenerationWithCTC(GenerationMixin):
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
         stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
 
-        accepts_attention_mask = "attention_mask" in set(inspect.signature(self.forward).parameters.keys())
+        accepts_attention_mask = "attention_mask" in set(
+            inspect.signature(self.forward).parameters.keys())
         requires_attention_mask = "encoder_outputs" not in model_kwargs
-        kwargs_has_attention_mask = model_kwargs.get("attention_mask", None) is not None
+        kwargs_has_attention_mask = model_kwargs.get(
+            "attention_mask", None) is not None
 
         # 3. Define model inputs
         inputs_tensor, model_input_name, model_kwargs = self._prepare_model_inputs(
@@ -151,7 +137,8 @@ class GenerationWithCTC(GenerationMixin):
         batch_size = inputs_tensor.shape[0]
 
         device = inputs_tensor.device
-        self._prepare_special_tokens(generation_config, kwargs_has_attention_mask, device=device)
+        self._prepare_special_tokens(
+            generation_config, kwargs_has_attention_mask, device=device)
 
         # decoder-only models must use left-padding for batched generation.
         if not self.config.is_encoder_decoder and not is_torchdynamo_compiling():
@@ -198,14 +185,14 @@ class GenerationWithCTC(GenerationMixin):
             )
         # pm574
         else:
-            input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop("input_ids")
+            input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop(
+                "input_ids")
         # elif model_input_name == "input_ids" or "input_ids" in model_kwargs:
         #     input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop("input_ids")
         # elif model_input_name == "inputs_embeds":
         #     input_ids = inputs_tensor
         # else:
         #     raise Exception("error here")
-
 
         if generation_config.token_healing:
             input_ids = self.heal_tokens(input_ids, tokenizer)
@@ -215,8 +202,10 @@ class GenerationWithCTC(GenerationMixin):
 
         # 6. Prepare `max_length` depending on other stopping criteria.
         input_ids_length = input_ids.shape[-1]
-        has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
-        has_default_min_length = kwargs.get("min_length") is None and generation_config.min_length is not None
+        has_default_max_length = kwargs.get(
+            "max_length") is None and generation_config.max_length is not None
+        has_default_min_length = kwargs.get(
+            "min_length") is None and generation_config.min_length is not None
         generation_config = self._prepare_generated_length(
             generation_config=generation_config,
             has_default_max_length=has_default_max_length,
@@ -281,7 +270,8 @@ class GenerationWithCTC(GenerationMixin):
         elif generation_config.cache_implementation is None and self._supports_default_dynamic_cache():
             past = model_kwargs.get(cache_name, None)
             requires_cross_attention_cache = (
-                self.config.is_encoder_decoder or model_kwargs.get("encoder_outputs") is not None
+                self.config.is_encoder_decoder or model_kwargs.get(
+                    "encoder_outputs") is not None
             )
             if past is None:
                 model_kwargs[cache_name] = (
@@ -297,11 +287,13 @@ class GenerationWithCTC(GenerationMixin):
                     else EncoderDecoderCache.from_legacy_cache(past)
                 )
                 use_dynamic_cache_by_default = True
-                
-        self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
+
+        self._validate_generated_length(
+            generation_config, input_ids_length, has_default_max_length)
 
         # 7. determine generation mode
-        generation_mode = generation_config.get_generation_mode(assistant_model)
+        generation_mode = generation_config.get_generation_mode(
+            assistant_model)
 
         if (streamer is not None or streamer_unit is not None) and (generation_config.num_beams > 1):
             raise ValueError(
@@ -341,7 +333,8 @@ class GenerationWithCTC(GenerationMixin):
         if generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
             # 11. prepare logits warper
             prepared_logits_warper = (
-                self._get_logits_warper(generation_config, device=input_ids.device)
+                self._get_logits_warper(
+                    generation_config, device=input_ids.device)
                 if generation_config.do_sample
                 else None
             )
@@ -399,7 +392,8 @@ class GenerationWithCTC(GenerationMixin):
         output_scores = generation_config.output_scores
         output_logits = generation_config.output_logits
         return_dict_in_generate = generation_config.return_dict_in_generate
-        has_eos_stopping_criteria = any(hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
+        has_eos_stopping_criteria = any(
+            hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
         do_sample = generation_config.do_sample
         if do_sample is True and not isinstance(logits_warper, LogitsProcessorList):
             raise ValueError(
@@ -412,28 +406,36 @@ class GenerationWithCTC(GenerationMixin):
         raw_logits = () if (return_dict_in_generate and output_logits) else None
         decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
         cross_attentions = () if (return_dict_in_generate and output_attentions) else None
-        decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
+        decoder_hidden_states = () if (
+            return_dict_in_generate and output_hidden_states) else None
 
         # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
         if return_dict_in_generate and self.config.is_encoder_decoder:
-            encoder_attentions = model_kwargs["encoder_outputs"].get("attentions") if output_attentions else None
+            encoder_attentions = model_kwargs["encoder_outputs"].get(
+                "attentions") if output_attentions else None
             encoder_hidden_states = (
-                model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
+                model_kwargs["encoder_outputs"].get(
+                    "hidden_states") if output_hidden_states else None
             )
 
         # keep track of which sequences are already finished
         batch_size = input_ids.shape[0]
         this_peer_finished = False
-        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
-        model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+        unfinished_sequences = torch.ones(
+            batch_size, dtype=torch.long, device=input_ids.device)
+        model_kwargs = self._get_initial_cache_position(
+            input_ids, model_kwargs)
 
         while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
             # prepare model inputs
-            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+            model_inputs = self.prepare_inputs_for_generation(
+                input_ids, **model_kwargs)
 
             # prepare variable output controls (note: some models won't accept all output controls)
-            model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
-            model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
+            model_inputs.update(
+                {"output_attentions": output_attentions} if output_attentions else {})
+            model_inputs.update(
+                {"output_hidden_states": output_hidden_states} if output_hidden_states else {})
 
             # forward pass to get next token
             outputs = self(**model_inputs, return_dict=True)
@@ -458,7 +460,8 @@ class GenerationWithCTC(GenerationMixin):
                     raw_logits += (next_token_logits,)
                 if output_attentions:
                     decoder_attentions += (
-                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (outputs.attentions,)
+                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (
+                            outputs.attentions,)
                     )
                     if self.config.is_encoder_decoder:
                         cross_attentions += (outputs.cross_attentions,)
@@ -473,13 +476,15 @@ class GenerationWithCTC(GenerationMixin):
             # token selection
             if do_sample:
                 probs = nn.functional.softmax(next_token_scores, dim=-1)
-                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+                next_tokens = torch.multinomial(
+                    probs, num_samples=1).squeeze(1)
             else:
                 next_tokens = torch.argmax(next_token_scores, dim=-1)
-            
+
             # finished sentences should have their next token be a padding token
             if has_eos_stopping_criteria:
-                next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
+                next_tokens = next_tokens * unfinished_sequences + \
+                    pad_token_id * (1 - unfinished_sequences)
 
             # update generated ids, model inputs, and length for next step
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
@@ -492,7 +497,8 @@ class GenerationWithCTC(GenerationMixin):
                 is_encoder_decoder=self.config.is_encoder_decoder,
             )
 
-            unfinished_sequences = unfinished_sequences & ~stopping_criteria(input_ids, scores)
+            unfinished_sequences = unfinished_sequences & ~stopping_criteria(
+                input_ids, scores)
             this_peer_finished = unfinished_sequences.max() == 0
 
             # This is needed to properly delete outputs.logits which may be very large for first iteration
@@ -546,7 +552,8 @@ class GenerationWithCTC(GenerationMixin):
         output_scores = generation_config.output_scores
         output_logits = generation_config.output_logits
         return_dict_in_generate = generation_config.return_dict_in_generate
-        has_eos_stopping_criteria = any(hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
+        has_eos_stopping_criteria = any(
+            hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
         do_sample = generation_config.do_sample
         if do_sample is True and not isinstance(logits_warper, LogitsProcessorList):
             raise ValueError(
@@ -559,29 +566,37 @@ class GenerationWithCTC(GenerationMixin):
         raw_logits = () if (return_dict_in_generate and output_logits) else None
         decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
         cross_attentions = () if (return_dict_in_generate and output_attentions) else None
-        decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
+        decoder_hidden_states = () if (
+            return_dict_in_generate and output_hidden_states) else None
 
         # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
         if return_dict_in_generate and self.config.is_encoder_decoder:
-            encoder_attentions = model_kwargs["encoder_outputs"].get("attentions") if output_attentions else None
+            encoder_attentions = model_kwargs["encoder_outputs"].get(
+                "attentions") if output_attentions else None
             encoder_hidden_states = (
-                model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
+                model_kwargs["encoder_outputs"].get(
+                    "hidden_states") if output_hidden_states else None
             )
 
         # keep track of which sequences are already finished
         batch_size = input_ids.shape[0]
         this_peer_finished = False
-        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
-        model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+        unfinished_sequences = torch.ones(
+            batch_size, dtype=torch.long, device=input_ids.device)
+        model_kwargs = self._get_initial_cache_position(
+            input_ids, model_kwargs)
 
         generated_units = torch.tensor([])
         while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
             # prepare model inputs
-            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+            model_inputs = self.prepare_inputs_for_generation(
+                input_ids, **model_kwargs)
 
             # prepare variable output controls (note: some models won't accept all output controls)
-            model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
-            model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
+            model_inputs.update(
+                {"output_attentions": output_attentions} if output_attentions else {})
+            model_inputs.update(
+                {"output_hidden_states": output_hidden_states} if output_hidden_states else {})
 
             # forward pass to get next token
             outputs = self(**model_inputs, return_dict=True)
@@ -606,7 +621,8 @@ class GenerationWithCTC(GenerationMixin):
                     raw_logits += (next_token_logits,)
                 if output_attentions:
                     decoder_attentions += (
-                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (outputs.attentions,)
+                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (
+                            outputs.attentions,)
                     )
                     if self.config.is_encoder_decoder:
                         cross_attentions += (outputs.cross_attentions,)
@@ -621,18 +637,22 @@ class GenerationWithCTC(GenerationMixin):
             # token selection
             if do_sample:
                 probs = nn.functional.softmax(next_token_scores, dim=-1)
-                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+                next_tokens = torch.multinomial(
+                    probs, num_samples=1).squeeze(1)
             else:
                 next_tokens = torch.argmax(next_token_scores, dim=-1)
-            
+
             # speechgen
-            hidden_states = torch.cat([decoder_hidden_states[0][-1][:, -1:, :]] + [decoder_hidden_states[i][-1] for i in range(1, len(decoder_hidden_states))], dim=1)
+            hidden_states = torch.cat([decoder_hidden_states[0][-1][:, -1:, :]] + [
+                                      decoder_hidden_states[i][-1] for i in range(1, len(decoder_hidden_states))], dim=1)
             ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
-            cur_units = ctc_postprocess(ctc_pred, blank=self.model.config.unit_vocab_size)
-            
+            cur_units = ctc_postprocess(
+                ctc_pred, blank=self.model.config.unit_vocab_size)
+
             # finished sentences should have their next token be a padding token
             if has_eos_stopping_criteria:
-                next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
+                next_tokens = next_tokens * unfinished_sequences + \
+                    pad_token_id * (1 - unfinished_sequences)
 
             # update generated ids, model inputs, and length for next step
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
@@ -648,7 +668,8 @@ class GenerationWithCTC(GenerationMixin):
                 is_encoder_decoder=self.config.is_encoder_decoder,
             )
 
-            unfinished_sequences = unfinished_sequences & ~stopping_criteria(input_ids, scores)
+            unfinished_sequences = unfinished_sequences & ~stopping_criteria(
+                input_ids, scores)
             this_peer_finished = unfinished_sequences.max() == 0
 
             # This is needed to properly delete outputs.logits which may be very large for first iteration
@@ -683,10 +704,10 @@ class GenerationWithCTC(GenerationMixin):
         else:
             return input_ids
 
-
     def ctc_postprocess(self, tokens, blank):
         _toks = tokens.squeeze(0).tolist()
-        deduplicated_toks = [v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]]
+        deduplicated_toks = [v for i, v in enumerate(
+            _toks) if i == 0 or v != _toks[i - 1]]
         hyp = torch.tensor([v for v in deduplicated_toks if v != blank])
         return hyp
 
@@ -695,15 +716,16 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
     config_class = Typhoon2AudioConfig
     _supports_cache_class = True
 
-    def __init__(self, 
-        config,
-        attn_implementation=None, # only for the LLM
-    ):
+    def __init__(self,
+                 config,
+                 attn_implementation=None,  # only for the LLM
+                 ):
         super().__init__(config)
         # 1. Speech Encoder
         # 1.1) Whisper Encoder
         # feature_extractor
-        self.feature_extractor = WhisperFeatureExtractor(feature_size=config.whisper_extractor_feature_size)
+        self.feature_extractor = WhisperFeatureExtractor(
+            feature_size=config.whisper_extractor_feature_size)
         # whisper encoder
         self.speech_encoder = WhisperModel(config.whisper).encoder
         self.ln_speech = nn.LayerNorm(config.whisper.d_model)
@@ -729,12 +751,12 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         # tokenizer
         self.llama_tokenizer = AutoTokenizer.from_pretrained(
             config.llama_base_model, use_fast=False)
-        self.llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'}) 
+        self.llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         self.llama_tokenizer.padding_side = "right"
 
         # speech -> LLM projection
         self.speech_llama_proj = nn.Linear(
-            self.speech_Qformer.config.hidden_size, 
+            self.speech_Qformer.config.hidden_size,
             self.llama_model.config.hidden_size,
         )
 
@@ -749,7 +771,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         query_tokens = nn.Parameter(
             torch.zeros(1, num_query_token, encoder_config.hidden_size),
         )
-        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
+        query_tokens.data.normal_(
+            mean=0.0, std=encoder_config.initializer_range)
         return Qformer, query_tokens
 
     def encode_speech_only(
@@ -757,18 +780,23 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         audio
     ):
         # whisper
-        spectrogram = self.feature_extractor(audio, return_tensors="pt", sampling_rate=16000).input_features.to(self.device).to(self.dtype) # [1, 80, 3000]
-        speech_embeds = self.speech_encoder(spectrogram, return_dict=True).last_hidden_state
+        spectrogram = self.feature_extractor(audio, return_tensors="pt", sampling_rate=16000).input_features.to(
+            self.device).to(self.dtype)  # [1, 80, 3000]
+        speech_embeds = self.speech_encoder(
+            spectrogram, return_dict=True).last_hidden_state
 
         # beats
         raw_wav = torch.from_numpy(audio).to(self.device).unsqueeze(0)
-        audio_padding_mask = torch.zeros(raw_wav.shape, device=self.device).bool()
-        audio_embeds, _ = self.beats.extract_features(raw_wav, padding_mask=audio_padding_mask, feature_only=True, torch_dtype=self.dtype)
+        audio_padding_mask = torch.zeros(
+            raw_wav.shape, device=self.device).bool()
+        audio_embeds, _ = self.beats.extract_features(
+            raw_wav, padding_mask=audio_padding_mask, feature_only=True, torch_dtype=self.dtype)
 
         # auditory embeds
         speech_embeds = self.ln_speech(speech_embeds)
         audio_embeds = self.ln_audio(audio_embeds)
-        audio_embeds = F.pad(audio_embeds, (0, 0, 0, speech_embeds.size(1) - audio_embeds.size(1)))
+        audio_embeds = F.pad(
+            audio_embeds, (0, 0, 0, speech_embeds.size(1) - audio_embeds.size(1)))
         speech_embeds = torch.cat([speech_embeds, audio_embeds], dim=-1)
 
         # split frames
@@ -778,15 +806,19 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         kernel = (1, kernel)
         stride = (1, stride)
         speech_embeds_tr = speech_embeds.transpose(1, 2).unsqueeze(2)
-        speech_embeds_overlap = F.unfold(speech_embeds_tr, kernel_size=kernel, dilation=1, padding=0, stride=stride)
+        speech_embeds_overlap = F.unfold(
+            speech_embeds_tr, kernel_size=kernel, dilation=1, padding=0, stride=stride)
         _, _, L = speech_embeds_overlap.shape
         speech_embeds_overlap = speech_embeds_overlap.view(B, -1, kernel[1], L)
-        speech_embeds_overlap = torch.permute(speech_embeds_overlap, [0, 3, 2, 1])
+        speech_embeds_overlap = torch.permute(
+            speech_embeds_overlap, [0, 3, 2, 1])
         speech_embeds = speech_embeds_overlap.reshape(-1, kernel[1], C)
-        speech_atts = torch.ones(speech_embeds.size()[:-1], dtype=torch.long, device=speech_embeds.device)
+        speech_atts = torch.ones(speech_embeds.size(
+        )[:-1], dtype=torch.long, device=speech_embeds.device)
 
         # Qformer
-        query_tokens = self.speech_query_tokens.expand(speech_embeds.shape[0], -1, -1)
+        query_tokens = self.speech_query_tokens.expand(
+            speech_embeds.shape[0], -1, -1)
         query_output = self.speech_Qformer.bert(
             query_embeds=query_tokens,
             encoder_hidden_states=speech_embeds,
@@ -794,7 +826,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             return_dict=True,
         )
         speech_embeds = self.speech_llama_proj(query_output.last_hidden_state)
-        speech_embeds = speech_embeds.view(B, -1, speech_embeds.size(2)).contiguous()
+        speech_embeds = speech_embeds.view(
+            B, -1, speech_embeds.size(2)).contiguous()
         return speech_embeds
 
     def encode_speech_with_text(
@@ -807,7 +840,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
 
         embed_tokens = self.llama_model.model.embed_tokens
         # "<|start_header_id|>user<|end_header_id|>\n\n<Speech><SpeechHere></Speech> {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-        prompt_left, prompts_right = prompt_pattern.format(prompt).split('<SpeechHere>')
+        prompt_left, prompts_right = prompt_pattern.format(
+            prompt).split('<SpeechHere>')
         prompt_left_ids = self.llama_tokenizer(
             prompt_left,
             return_tensors="pt",
@@ -829,12 +863,14 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             ) * self.llama_tokenizer.bos_token_id
         )
 
-        embeds = torch.cat([bos_embeds, prompt_left_embeds, speech_embeds, prompt_right_embeds], dim=1)
-        atts = torch.ones(embeds.size()[:-1], dtype=torch.long).to(embeds.device)
+        embeds = torch.cat([bos_embeds, prompt_left_embeds,
+                           speech_embeds, prompt_right_embeds], dim=1)
+        atts = torch.ones(embeds.size()[:-1],
+                          dtype=torch.long).to(embeds.device)
         return embeds, atts
 
     def forward(
-        self, 
+        self,
         audio,
         prompt,
         prompt_pattern,
@@ -842,9 +878,10 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         return_dict: Optional[bool] = None,
         **kwargs
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        
+
         # TODO: support batch_size > 1
-        embeds, atts = self.encode_speech_with_text(audio, prompt, prompt_pattern)
+        embeds, atts = self.encode_speech_with_text(
+            audio, prompt, prompt_pattern)
         # forward
         outputs = self.llama_model.forward(
             inputs_embeds=embeds,
@@ -905,7 +942,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         temperature=1.0,
         streamer=None
     ) -> str:
-        embeds, atts = self.encode_speech_with_text(audio, prompt, prompt_pattern)
+        embeds, atts = self.encode_speech_with_text(
+            audio, prompt, prompt_pattern)
         # generate
         output = self.llama_model.generate(
             inputs_embeds=embeds,
@@ -922,13 +960,14 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             pad_token_id=self.llama_tokenizer.pad_token_id,
             streamer=streamer,
         )
-        output_text = self.llama_tokenizer.batch_decode(output, add_special_tokens=False, skip_special_tokens=True)
+        output_text = self.llama_tokenizer.batch_decode(
+            output, add_special_tokens=False, skip_special_tokens=True)
         return output_text[0]
 
     # ------------------------------------------------------------------------------- #
     # November 2024 -- multi-turn
     def init_multiturn(
-        self, 
+        self,
         system_prompt="<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant named ไต้ฝุ่น. You always answer in Thai.<|eot_id|>",
         user_prompt_prefix="<|start_header_id|>user<|end_header_id|>\n\n",
         user_prompt_suffix="</Speech> <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
@@ -944,11 +983,12 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 add_special_tokens=False
             ).to(self.device).input_ids
             system_prompt_embeds = embed_tokens(system_prompt_ids)
-            self.add_cache(dtype="text:system_prompt", embeds=system_prompt_embeds)
+            self.add_cache(dtype="text:system_prompt",
+                           embeds=system_prompt_embeds)
         print("multi-turn conversation initialized!")
 
     def add_cache(self, dtype, embeds):
-        # cache 
+        # cache
         # --> for text, cache content = token embeddings
         # --> for wav, cache content = speech embeddings
         self.conversations.append({
@@ -979,7 +1019,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             add_special_tokens=False
         ).to(self.device).input_ids
         user_prompt_prefix_embeds = embed_tokens(user_prompt_prefix_ids)
-        self.add_cache(dtype="text:user_prompt_prefix", embeds=user_prompt_prefix_embeds)
+        self.add_cache(dtype="text:user_prompt_prefix",
+                       embeds=user_prompt_prefix_embeds)
 
         # process the new wav
         speech_embeds = self.process_wav(wav_path)
@@ -992,8 +1033,8 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             add_special_tokens=False
         ).to(self.device).input_ids
         user_prompt_suffix_embeds = embed_tokens(user_prompt_suffix_ids)
-        self.add_cache(dtype="text:user_prompt_suffix", embeds=user_prompt_suffix_embeds)
-
+        self.add_cache(dtype="text:user_prompt_suffix",
+                       embeds=user_prompt_suffix_embeds)
 
         # --------------------------------------------------------------------------- #
         list_of_embeds = []
@@ -1001,9 +1042,10 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             list_of_embeds.append(em['embeds'])
         # for em in self.conversations: print(em['dtype'], em['embeds'].shape)
         embeds = torch.cat(list_of_embeds, dim=1)
-        atts = torch.ones(embeds.size()[:-1], dtype=torch.long).to(embeds.device)
+        atts = torch.ones(embeds.size()[:-1],
+                          dtype=torch.long).to(embeds.device)
         print("seq_length:", embeds.shape[1])
-        
+
         # generate
         output = self.llama_model.generate(
             inputs_embeds=embeds,
@@ -1021,9 +1063,10 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             pad_token_id=self.llama_tokenizer.pad_token_id,
             streamer=streamer,
         )
-        
+
         # add assistant generation
-        output_text = self.llama_tokenizer.batch_decode(output, add_special_tokens=False, skip_special_tokens=True)
+        output_text = self.llama_tokenizer.batch_decode(
+            output, add_special_tokens=False, skip_special_tokens=True)
 
         assistant_text_ids = self.llama_tokenizer(
             output_text[0] + "<|eot_id|>",
@@ -1031,10 +1074,10 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             add_special_tokens=False
         ).to(self.device).input_ids
         assistant_text_embeds = embed_tokens(assistant_text_ids)
-        self.add_cache(dtype="text:assistant_generation", embeds=assistant_text_embeds)
+        self.add_cache(dtype="text:assistant_generation",
+                       embeds=assistant_text_embeds)
 
         return output_text[0]
-
 
 
 class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGeneration, GenerationWithCTC):
@@ -1054,10 +1097,11 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         if config is None:
             config = self.config
         path_to_vocoder_checkpoint = hf_hub_download(
-            repo_id=config.vocoder_path['repo_id'], 
+            repo_id=config.vocoder_path['repo_id'],
             filename=config.vocoder_path['filename']
         )
-        self.vocoder = CodeHiFiGANVocoder(path_to_vocoder_checkpoint, config.vocoder_config)
+        self.vocoder = CodeHiFiGANVocoder(
+            path_to_vocoder_checkpoint, config.vocoder_config)
         self.vocoder.to(self.device)
 
     def forward(
@@ -1112,12 +1156,13 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         # ----------------- #
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        
+
         if ("audio" in kwargs and "prompt" in kwargs and "prompt_pattern" in kwargs) and inputs_embeds is None:
             audio = kwargs["audio"]
             prompt = kwargs["prompt"]
             prompt_pattern = kwargs["prompt_pattern"]
-            inputs_embeds, attention_mask = self.encode_speech_with_text(audio, prompt, prompt_pattern)
+            inputs_embeds, attention_mask = self.encode_speech_with_text(
+                audio, prompt, prompt_pattern)
 
         outputs = GenerationWithCTC.generate(
             self,
@@ -1127,7 +1172,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
             output_hidden_states=output_hidden_states,
             return_dict_in_generate=return_dict_in_generate,
             streaming_unit_gen=streaming_unit_gen,
-            max_length=max_length, # typhoon2 (llama3.1) will set this to 20 somehow otherwise
+            # typhoon2 (llama3.1) will set this to 20 somehow otherwise
+            max_length=max_length,
 
             # ------------------- #
             bos_token_id=128000,
@@ -1136,28 +1182,32 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         )
 
         hidden_states = outputs['hidden_states']
-        hidden_states = torch.cat([hidden_states[0][-1][:, -1:, :]] + [hidden_states[i][-1] for i in range(1, len(hidden_states))], dim=1)
+        hidden_states = torch.cat([hidden_states[0][-1][:, -1:, :]] +
+                                  [hidden_states[i][-1] for i in range(1, len(hidden_states))], dim=1)
         ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
 
         # processing
         output_ids, output_units = outputs.sequences, ctc_pred
 
         # text
-        output_text = self.llama_tokenizer.batch_decode(output_ids, add_special_tokens=False, skip_special_tokens=True)[0]
-        
+        output_text = self.llama_tokenizer.batch_decode(
+            output_ids, add_special_tokens=False, skip_special_tokens=True)[0]
+
         # wav
-        output_units = self.ctc_postprocess(output_units, blank=self.config.unit_vocab_size)
+        output_units = self.ctc_postprocess(
+            output_units, blank=self.config.unit_vocab_size)
         output_units = [(list(map(int, output_units.strip().split())))]
-        
+
         # vocoder
         if hasattr(self, 'vocoder'):
-            output_units_tensor = torch.tensor(output_units, dtype=torch.int64, device=self.device)
+            output_units_tensor = torch.tensor(
+                output_units, dtype=torch.int64, device=self.device)
             output_audio = self.vocoder({"code": output_units_tensor}, True)
             output_audio = output_audio.detach().cpu().numpy()
         else:
             output_audio = None
         output_audio = {
-            "array": output_audio, 
+            "array": output_audio,
             "sampling_rate": self.config.vocoder_config['sampling_rate']
         }
         return {
@@ -1168,17 +1218,17 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
 
     def ctc_postprocess(self, tokens, blank):
         _toks = tokens.squeeze(0).tolist()
-        deduplicated_toks = [v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]]
+        deduplicated_toks = [v for i, v in enumerate(
+            _toks) if i == 0 or v != _toks[i - 1]]
         hyp = [v for v in deduplicated_toks if v != blank]
         hyp = " ".join(list(map(str, hyp)))
         return hyp
 
-
     def prepare_inputs_for_generation(
-        self, 
-        input_ids, 
+        self,
+        input_ids,
         past_key_values=None,
-        inputs_embeds=None, 
+        inputs_embeds=None,
         **kwargs
     ):
         inputs = self.prepare_inputs_for_generation_base(
@@ -1214,7 +1264,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         #   (this alternative is not as robust as calling `generate` and letting it create `cache_position`)
         elif cache_position is None:
             past_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
-            cache_position = torch.arange(past_length, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+            cache_position = torch.arange(
+                past_length, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
 
         # 2. Generic cache-dependent input preparation
         # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
@@ -1226,10 +1277,12 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
             model_inputs["past_key_values"] = past_key_values
             if (
                 inputs_embeds is not None  # Exception 1
-                or (is_torchdynamo_compiling() or cache_position[-1] >= input_ids.shape[1])  # Exception 3
+                # Exception 3
+                or (is_torchdynamo_compiling() or cache_position[-1] >= input_ids.shape[1])
             ):
-                input_ids = input_ids[:, -cache_position.shape[0] :]
-            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                input_ids = input_ids[:, -cache_position.shape[0]:]
+            # Default case (the "else", a no op, is Exception 2)
+            elif input_ids.shape[1] != cache_position.shape[0]:
                 input_ids = input_ids[:, cache_position]
 
         # 3. Prepare base model inputs
@@ -1241,10 +1294,12 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
                 model_inputs["inputs_embeds"] = inputs_embeds
             else:
                 # `clone` calls in this function ensure a consistent stride. See #32227
-                model_inputs[input_ids_key] = input_ids.clone(memory_format=torch.contiguous_format)
+                model_inputs[input_ids_key] = input_ids.clone(
+                    memory_format=torch.contiguous_format)
                 model_inputs["inputs_embeds"] = None
         else:
-            model_inputs[input_ids_key] = input_ids.clone(memory_format=torch.contiguous_format)
+            model_inputs[input_ids_key] = input_ids.clone(
+                memory_format=torch.contiguous_format)
 
         # 4. Create missing `position_ids` on the fly
         if (
@@ -1254,7 +1309,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         ):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
-            kwargs["position_ids"] = position_ids  # placed in kwargs for further processing (see below)
+            # placed in kwargs for further processing (see below)
+            kwargs["position_ids"] = position_ids
 
         # 5. Slice model inputs if it's an input that should have the same length as `input_ids`
         for model_input_name in ["position_ids", "token_type_ids"]:
@@ -1267,7 +1323,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
                         else model_inputs[input_ids_key].shape[1]
                     )
                     model_input = model_input[:, -current_input_length:]
-                    model_input = model_input.clone(memory_format=torch.contiguous_format)
+                    model_input = model_input.clone(
+                        memory_format=torch.contiguous_format)
                 model_inputs[model_input_name] = model_input
 
         # 6. Create 4D attention mask is we are using a `StaticCache` (important for performant compiled forward pass)
@@ -1321,7 +1378,6 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         model_inputs.pop("labels", None)
         return model_inputs
 
-
     def _get_logits_warper(
         self,
         generation_config: GenerationConfig,
@@ -1339,7 +1395,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         # better score (i.e. keep len(list(generation_config._eos_token_tensor)) + 1)
         if generation_config.num_beams > 1:
             if isinstance(generation_config._eos_token_tensor, list):
-                min_tokens_to_keep = len(generation_config._eos_token_tensor) + 1
+                min_tokens_to_keep = len(
+                    generation_config._eos_token_tensor) + 1
             elif isinstance(generation_config._eos_token_tensor, torch.Tensor):
                 min_tokens_to_keep = generation_config._eos_token_tensor.shape[0] + 1
             else:
@@ -1350,21 +1407,27 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
         # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
         # all samplers can be found in `generation_utils_samplers.py`
         if generation_config.temperature is not None and generation_config.temperature != 1.0:
-            warpers.append(TemperatureLogitsWarper(generation_config.temperature))
+            warpers.append(TemperatureLogitsWarper(
+                generation_config.temperature))
         if generation_config.top_k is not None and generation_config.top_k != 0:
-            warpers.append(TopKLogitsWarper(top_k=generation_config.top_k, min_tokens_to_keep=min_tokens_to_keep))
+            warpers.append(TopKLogitsWarper(
+                top_k=generation_config.top_k, min_tokens_to_keep=min_tokens_to_keep))
         if generation_config.top_p is not None and generation_config.top_p < 1.0:
-            warpers.append(TopPLogitsWarper(top_p=generation_config.top_p, min_tokens_to_keep=min_tokens_to_keep))
+            warpers.append(TopPLogitsWarper(
+                top_p=generation_config.top_p, min_tokens_to_keep=min_tokens_to_keep))
         if generation_config.min_p is not None:
             # Applied after temperature scaling (see https://github.com/ggerganov/llama.cpp/pull/3841#issuecomment-2073826084)
-            warpers.append(MinPLogitsWarper(min_p=generation_config.min_p, min_tokens_to_keep=min_tokens_to_keep))
+            warpers.append(MinPLogitsWarper(
+                min_p=generation_config.min_p, min_tokens_to_keep=min_tokens_to_keep))
         if generation_config.typical_p is not None and generation_config.typical_p < 1.0:
             warpers.append(
-                TypicalLogitsWarper(mass=generation_config.typical_p, min_tokens_to_keep=min_tokens_to_keep)
+                TypicalLogitsWarper(
+                    mass=generation_config.typical_p, min_tokens_to_keep=min_tokens_to_keep)
             )
         if generation_config.epsilon_cutoff is not None and 0.0 < generation_config.epsilon_cutoff < 1.0:
             warpers.append(
-                EpsilonLogitsWarper(epsilon=generation_config.epsilon_cutoff, min_tokens_to_keep=min_tokens_to_keep)
+                EpsilonLogitsWarper(
+                    epsilon=generation_config.epsilon_cutoff, min_tokens_to_keep=min_tokens_to_keep)
             )
         if generation_config.eta_cutoff is not None and 0.0 < generation_config.eta_cutoff < 1.0:
             warpers.append(
@@ -1377,12 +1440,15 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
             warpers.append(LogitNormalization())
         return warpers
 
-#------------------------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------------------------ #
 # Speech Decoder Componnt
+
+
 class SpeechGeneratorCTC(nn.Module):
     def __init__(self, config):
         super().__init__()
-        n_layers, n_dims, n_heads, n_inter_dims = list(map(int, config.ctc_decoder_config[1:-1].split(",")))
+        n_layers, n_dims, n_heads, n_inter_dims = list(
+            map(int, config.ctc_decoder_config[1:-1].split(",")))
         _config = copy.deepcopy(config)
         _config.hidden_size = n_dims
         _config.num_hidden_layers = n_layers
@@ -1393,17 +1459,20 @@ class SpeechGeneratorCTC(nn.Module):
         self.upsample_factor = config.ctc_upsample_factor
         self.input_proj = nn.Linear(config.hidden_size, n_dims)
         self.layers = nn.ModuleList(
-            [LlamaDecoderLayer(_config, layer_idx) for layer_idx in range(n_layers)]
+            [LlamaDecoderLayer(_config, layer_idx)
+             for layer_idx in range(n_layers)]
         )
         self.unit_vocab_size = config.unit_vocab_size
         self.output_proj = nn.Linear(n_dims, config.unit_vocab_size + 1)
         self.speech_decoder_ignore_index = config.speech_decoder_ignore_index
 
     def upsample(self, reps, tgt_units=None):
-        src_lens = torch.LongTensor([len(rep) for rep in reps]).to(reps[0].device)
+        src_lens = torch.LongTensor([len(rep)
+                                    for rep in reps]).to(reps[0].device)
         up_lens = src_lens * self.upsample_factor
         if tgt_units is not None:
-            tgt_lens = tgt_units.ne(self.speech_decoder_ignore_index).long().sum(dim=-1)
+            tgt_lens = tgt_units.ne(
+                self.speech_decoder_ignore_index).long().sum(dim=-1)
             up_lens = torch.max(up_lens, tgt_lens)
         reps = torch.nn.utils.rnn.pad_sequence(reps, batch_first=True)
         padding_mask = self._lengths_to_padding_mask(up_lens)
@@ -1418,14 +1487,17 @@ class SpeechGeneratorCTC(nn.Module):
             ),
         )
         copied_reps = copied_reps.masked_fill(padding_mask.unsqueeze(-1), 0)
-        position_ids = torch.arange(0, max(up_lens)).unsqueeze(0).expand(len(reps), -1).to(device=copied_reps.device)
+        position_ids = torch.arange(0, max(up_lens)).unsqueeze(
+            0).expand(len(reps), -1).to(device=copied_reps.device)
         return copied_reps, ~padding_mask, position_ids
-    
+
     def forward(self, tgt_reps, labels, tgt_units):
         tgt_label_reps = []
         for tgt_rep, label in zip(tgt_reps, labels):
-            tgt_label_reps.append(tgt_rep[label != self.speech_decoder_ignore_index])
-        hidden_states, attention_mask, position_ids = self.upsample(tgt_label_reps, tgt_units)
+            tgt_label_reps.append(
+                tgt_rep[label != self.speech_decoder_ignore_index])
+        hidden_states, attention_mask, position_ids = self.upsample(
+            tgt_label_reps, tgt_units)
         hidden_states = self.input_proj(hidden_states)
         for layer in self.layers:
             layer_outputs = layer(
@@ -1435,9 +1507,11 @@ class SpeechGeneratorCTC(nn.Module):
             )
             hidden_states = layer_outputs[0]
         ctc_logits = self.output_proj(hidden_states)
-        ctc_lprobs = F.log_softmax(ctc_logits.float(), dim=-1, dtype=torch.float32)
+        ctc_lprobs = F.log_softmax(
+            ctc_logits.float(), dim=-1, dtype=torch.float32)
         ctc_lens = attention_mask.long().sum(dim=-1)
-        ctc_tgt_lens = tgt_units.ne(self.speech_decoder_ignore_index).long().sum(dim=-1)
+        ctc_tgt_lens = tgt_units.ne(
+            self.speech_decoder_ignore_index).long().sum(dim=-1)
         ctc_tgt_mask = ~self._lengths_to_padding_mask(ctc_tgt_lens)
         ctc_tgt_flat = tgt_units.masked_select(ctc_tgt_mask)
         ctc_loss = F.ctc_loss(
@@ -1451,7 +1525,7 @@ class SpeechGeneratorCTC(nn.Module):
         )
         ctc_loss /= ctc_tgt_lens.sum().item()
         return ctc_loss
-    
+
     def predict(self, tgt_reps):
         hidden_states, attention_mask, position_ids = self.upsample([tgt_reps])
         hidden_states = self.input_proj(hidden_states)
@@ -1463,8 +1537,10 @@ class SpeechGeneratorCTC(nn.Module):
             )
             hidden_states = layer_outputs[0]
         ctc_logits = self.output_proj(hidden_states)
-        ctc_lprobs = F.log_softmax(ctc_logits.float(), dim=-1, dtype=torch.float32)
-        ctc_pred = ctc_lprobs.argmax(dim=-1).masked_fill_(~attention_mask, self.unit_vocab_size)
+        ctc_lprobs = F.log_softmax(
+            ctc_logits.float(), dim=-1, dtype=torch.float32)
+        ctc_pred = ctc_lprobs.argmax(
+            dim=-1).masked_fill_(~attention_mask, self.unit_vocab_size)
         return ctc_pred
 
     def _lengths_to_padding_mask(self, lens):
@@ -1474,7 +1550,8 @@ class SpeechGeneratorCTC(nn.Module):
         return mask
 
     def _uniform_assignment(self, src_lens, tgt_lens):
-        tgt_indices = torch.arange(torch.max(tgt_lens)).expand(len(tgt_lens), -1).to(tgt_lens.device)
+        tgt_indices = torch.arange(torch.max(tgt_lens)).expand(
+            len(tgt_lens), -1).to(tgt_lens.device)
         ratio = tgt_lens / src_lens
         index_t = (tgt_indices / ratio.view(-1, 1)).long()
         return index_t
@@ -1496,12 +1573,14 @@ class BertEmbeddings(nn.Module):
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1))
+            "position_ids", torch.arange(
+                config.max_position_embeddings).expand((1, -1))
         )
         self.position_embedding_type = getattr(
             config, "position_embedding_type", "absolute"
@@ -1523,7 +1602,7 @@ class BertEmbeddings(nn.Module):
 
         if position_ids is None:
             position_ids = self.position_ids[
-                :, past_key_values_length : seq_length + past_key_values_length
+                :, past_key_values_length: seq_length + past_key_values_length
             ].clone()
 
         if input_ids is not None:
@@ -1555,7 +1634,8 @@ class BertSelfAttention(nn.Module):
             )
 
         self.num_attention_heads = config.num_attention_heads
-        self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
+        self.attention_head_size = int(
+            config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
         self.query = nn.Linear(config.hidden_size, self.all_head_size)
@@ -1617,8 +1697,10 @@ class BertSelfAttention(nn.Module):
         is_cross_attention = encoder_hidden_states is not None
 
         if is_cross_attention:
-            key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
-            value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
+            key_layer = self.transpose_for_scores(
+                self.key(encoder_hidden_states))
+            value_layer = self.transpose_for_scores(
+                self.value(encoder_hidden_states))
             attention_mask = encoder_attention_mask
         elif past_key_value is not None:
             key_layer = self.transpose_for_scores(self.key(hidden_states))
@@ -1636,7 +1718,8 @@ class BertSelfAttention(nn.Module):
         past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = torch.matmul(
+            query_layer, key_layer.transpose(-1, -2))
 
         if (
             self.position_embedding_type == "relative_key"
@@ -1675,7 +1758,8 @@ class BertSelfAttention(nn.Module):
                     + relative_position_scores_key
                 )
 
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_scores = attention_scores / \
+            math.sqrt(self.attention_head_size)
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
             attention_scores = attention_scores + attention_mask
@@ -1698,7 +1782,8 @@ class BertSelfAttention(nn.Module):
         context_layer = torch.matmul(attention_probs_dropped, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        new_context_layer_shape = context_layer.size()[
+            :-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
 
         outputs = (
@@ -1713,7 +1798,8 @@ class BertSelfOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states, input_tensor):
@@ -1747,7 +1833,8 @@ class BertAttention(nn.Module):
         self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
 
         # Update hyper params and store pruned heads
-        self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
+        self.self.num_attention_heads = self.self.num_attention_heads - \
+            len(heads)
         self.self.all_head_size = (
             self.self.attention_head_size * self.self.num_attention_heads
         )
@@ -1799,7 +1886,8 @@ class BertOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states, input_tensor):
@@ -1893,7 +1981,8 @@ class BertLayer(nn.Module):
                     self.seq_len_dim,
                     attention_output[:, query_length:, :],
                 )
-                layer_output = torch.cat([layer_output, layer_output_text], dim=1)
+                layer_output = torch.cat(
+                    [layer_output, layer_output_text], dim=1)
         else:
             layer_output = apply_chunking_to_forward(
                 self.feed_forward_chunk,
@@ -1997,7 +2086,8 @@ class BertEncoder(nn.Module):
                 next_decoder_cache += (layer_outputs[-1],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
-                all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
+                all_cross_attentions = all_cross_attentions + \
+                    (layer_outputs[2],)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -2046,7 +2136,8 @@ class BertPredictionHeadTransform(nn.Module):
             self.transform_act_fn = ACT2FN[config.hidden_act]
         else:
             self.transform_act_fn = config.hidden_act
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
 
     def forward(self, hidden_states):
         hidden_states = self.dense(hidden_states)
@@ -2062,7 +2153,8 @@ class BertLMPredictionHead(nn.Module):
 
         # The output weights are the same as the input embeddings, but there is
         # an output-only bias for each token.
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.decoder = nn.Linear(
+            config.hidden_size, config.vocab_size, bias=False)
 
         self.bias = nn.Parameter(torch.zeros(config.vocab_size))
 
@@ -2100,7 +2192,8 @@ class BertPreTrainedModel(PreTrainedModel):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            module.weight.data.normal_(
+                mean=0.0, std=self.config.initializer_range)
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
@@ -2188,7 +2281,8 @@ class BertModel(BertPreTrainedModel):
                 causal_mask = causal_mask.to(attention_mask.dtype)
 
                 if causal_mask.shape[1] < attention_mask.shape[1]:
-                    prefix_seq_len = attention_mask.shape[1] - causal_mask.shape[1]
+                    prefix_seq_len = attention_mask.shape[1] - \
+                        causal_mask.shape[1]
                     if has_query:  # UniLM style attention mask
                         causal_mask = torch.cat(
                             [
@@ -2204,7 +2298,8 @@ class BertModel(BertPreTrainedModel):
                     causal_mask = torch.cat(
                         [
                             torch.ones(
-                                (batch_size, causal_mask.shape[1], prefix_seq_len),
+                                (batch_size,
+                                 causal_mask.shape[1], prefix_seq_len),
                                 device=device,
                                 dtype=causal_mask.dtype,
                             ),
@@ -2213,7 +2308,8 @@ class BertModel(BertPreTrainedModel):
                         axis=-1,
                     )
                 extended_attention_mask = (
-                    causal_mask[:, None, :, :] * attention_mask[:, None, None, :]
+                    causal_mask[:, None, :, :] *
+                    attention_mask[:, None, None, :]
                 )
             else:
                 extended_attention_mask = attention_mask[:, None, None, :]
@@ -2343,14 +2439,16 @@ class BertModel(BertPreTrainedModel):
                     encoder_sequence_length,
                     _,
                 ) = encoder_hidden_states.size()
-            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
+            encoder_hidden_shape = (
+                encoder_batch_size, encoder_sequence_length)
 
             if type(encoder_attention_mask) == list:
                 encoder_extended_attention_mask = [
                     self.invert_attention_mask(mask) for mask in encoder_attention_mask
                 ]
             elif encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
+                encoder_attention_mask = torch.ones(
+                    encoder_hidden_shape, device=device)
                 encoder_extended_attention_mask = self.invert_attention_mask(
                     encoder_attention_mask
                 )
@@ -2366,7 +2464,8 @@ class BertModel(BertPreTrainedModel):
         # attention_probs has shape bsz x n_heads x N x N
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
+        head_mask = self.get_head_mask(
+            head_mask, self.config.num_hidden_layers)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -2402,7 +2501,8 @@ class BertModel(BertPreTrainedModel):
 class BertLMHeadModel(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
-    _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
+    _keys_to_ignore_on_load_missing = [
+        r"position_ids", r"predictions.decoder.bias"]
 
     def __init__(self, config):
         super().__init__(config)
@@ -2495,7 +2595,7 @@ class BertLMHeadModel(BertPreTrainedModel):
 
         sequence_output = outputs[0]
         if query_embeds is not None:
-            sequence_output = outputs[0][:, query_embeds.shape[1] :, :]
+            sequence_output = outputs[0][:, query_embeds.shape[1]:, :]
 
         prediction_scores = self.cls(sequence_output)
 
@@ -2505,9 +2605,11 @@ class BertLMHeadModel(BertPreTrainedModel):
         lm_loss = None
         if labels is not None:
             # we are doing next-token prediction; shift prediction scores and input ids by one
-            shifted_prediction_scores = prediction_scores[:, :-1, :].contiguous()
+            shifted_prediction_scores = prediction_scores[:,
+                                                          :-1, :].contiguous()
             labels = labels[:, 1:].contiguous()
-            loss_fct = CrossEntropyLoss(reduction=reduction, label_smoothing=0.1)
+            loss_fct = CrossEntropyLoss(
+                reduction=reduction, label_smoothing=0.1)
             lm_loss = loss_fct(
                 shifted_prediction_scores.view(-1, self.config.vocab_size),
                 labels.view(-1),
@@ -2565,7 +2667,8 @@ class BertLMHeadModel(BertPreTrainedModel):
 class BertForMaskedLM(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
-    _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
+    _keys_to_ignore_on_load_missing = [
+        r"position_ids", r"predictions.decoder.bias"]
 
     def __init__(self, config):
         super().__init__(config)
@@ -2623,7 +2726,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         )
 
         if query_embeds is not None:
-            sequence_output = outputs[0][:, query_embeds.shape[1] :, :]
+            sequence_output = outputs[0][:, query_embeds.shape[1]:, :]
         prediction_scores = self.cls(sequence_output)
 
         if return_logits:
@@ -2633,7 +2736,8 @@ class BertForMaskedLM(BertPreTrainedModel):
         if labels is not None:
             loss_fct = CrossEntropyLoss()  # -100 index = padding token
             masked_lm_loss = loss_fct(
-                prediction_scores.view(-1, self.config.vocab_size), labels.view(-1)
+                prediction_scores.view(-1,
+                                       self.config.vocab_size), labels.view(-1)
             )
 
         if not return_dict:
@@ -2650,6 +2754,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         )
 
 # ------------------------------------------------------ #
+
 
 class BEATs(nn.Module):
     def __init__(
@@ -2680,7 +2785,8 @@ class BEATs(nn.Module):
 
         if cfg.finetuned_model:
             self.predictor_dropout = nn.Dropout(cfg.predictor_dropout)
-            self.predictor = nn.Linear(cfg.encoder_embed_dim, cfg.predictor_class)
+            self.predictor = nn.Linear(
+                cfg.encoder_embed_dim, cfg.predictor_class)
         else:
             self.predictor = None
 
@@ -2707,7 +2813,8 @@ class BEATs(nn.Module):
         fbanks = []
         for waveform in source:
             waveform = waveform.unsqueeze(0) * 2 ** 15
-            fbank = ta_kaldi.fbank(waveform, num_mel_bins=128, sample_frequency=16000, frame_length=25, frame_shift=10)
+            fbank = ta_kaldi.fbank(
+                waveform, num_mel_bins=128, sample_frequency=16000, frame_length=25, frame_shift=10)
             fbanks.append(fbank)
         fbank = torch.stack(fbanks, dim=0)
         fbank = (fbank - fbank_mean) / (2 * fbank_std)
@@ -2722,7 +2829,8 @@ class BEATs(nn.Module):
             feature_only=False,
             torch_dtype=torch.float32
     ):
-        fbank = self.preprocess(source, fbank_mean=fbank_mean, fbank_std=fbank_std).to(torch_dtype)
+        fbank = self.preprocess(
+            source, fbank_mean=fbank_mean, fbank_std=fbank_std).to(torch_dtype)
 
         if padding_mask is not None:
             padding_mask = self.forward_padding_mask(fbank, padding_mask)
@@ -2753,7 +2861,8 @@ class BEATs(nn.Module):
             if padding_mask is not None and padding_mask.any():
                 logits[padding_mask] = 0
                 logits = logits.sum(dim=1)
-                logits = logits / (~padding_mask).sum(dim=1).unsqueeze(-1).expand_as(logits)
+                logits = logits / \
+                    (~padding_mask).sum(dim=1).unsqueeze(-1).expand_as(logits)
             else:
                 logits = logits.mean(dim=1)
 
@@ -2762,6 +2871,7 @@ class BEATs(nn.Module):
             return lprobs, padding_mask
         else:
             return x, padding_mask
+
 
 class TransformerEncoder(nn.Module):
     def __init__(self, args):
@@ -2778,12 +2888,15 @@ class TransformerEncoder(nn.Module):
             groups=args.conv_pos_groups,
         )
         dropout = 0
-        std = math.sqrt((4 * (1.0 - dropout)) / (args.conv_pos * self.embedding_dim))
+        std = math.sqrt((4 * (1.0 - dropout)) /
+                        (args.conv_pos * self.embedding_dim))
         nn.init.normal_(self.pos_conv.weight, mean=0, std=std)
         nn.init.constant_(self.pos_conv.bias, 0)
 
-        self.pos_conv = nn.utils.weight_norm(self.pos_conv, name="weight", dim=2)
-        self.pos_conv = nn.Sequential(self.pos_conv, SamePad(args.conv_pos), nn.GELU())
+        self.pos_conv = nn.utils.weight_norm(
+            self.pos_conv, name="weight", dim=2)
+        self.pos_conv = nn.Sequential(
+            self.pos_conv, SamePad(args.conv_pos), nn.GELU())
 
         if hasattr(args, "relative_position_embedding"):
             self.relative_position_embedding = args.relative_position_embedding
@@ -2829,14 +2942,21 @@ class TransformerEncoder(nn.Module):
         if args.deep_norm:
             deep_norm_beta = math.pow(8 * args.encoder_layers, -1 / 4)
             for i in range(args.encoder_layers):
-                nn.init.xavier_normal_(self.layers[i].self_attn.k_proj.weight, gain=1)
-                nn.init.xavier_normal_(self.layers[i].self_attn.v_proj.weight, gain=deep_norm_beta)
-                nn.init.xavier_normal_(self.layers[i].self_attn.q_proj.weight, gain=1)
-                nn.init.xavier_normal_(self.layers[i].self_attn.out_proj.weight, gain=deep_norm_beta)
-                nn.init.xavier_normal_(self.layers[i].fc1.weight, gain=deep_norm_beta)
-                nn.init.xavier_normal_(self.layers[i].fc2.weight, gain=deep_norm_beta)
+                nn.init.xavier_normal_(
+                    self.layers[i].self_attn.k_proj.weight, gain=1)
+                nn.init.xavier_normal_(
+                    self.layers[i].self_attn.v_proj.weight, gain=deep_norm_beta)
+                nn.init.xavier_normal_(
+                    self.layers[i].self_attn.q_proj.weight, gain=1)
+                nn.init.xavier_normal_(
+                    self.layers[i].self_attn.out_proj.weight, gain=deep_norm_beta)
+                nn.init.xavier_normal_(
+                    self.layers[i].fc1.weight, gain=deep_norm_beta)
+                nn.init.xavier_normal_(
+                    self.layers[i].fc2.weight, gain=deep_norm_beta)
 
-        self.layer_wise_gradient_decay_ratio = getattr(args, "layer_wise_gradient_decay_ratio", 1)
+        self.layer_wise_gradient_decay_ratio = getattr(
+            args, "layer_wise_gradient_decay_ratio", 1)
 
     def forward(self, x, padding_mask=None, layer=None):
         x, layer_results = self.extract_features(x, padding_mask, layer)
@@ -2874,7 +2994,8 @@ class TransformerEncoder(nn.Module):
                 x = GradMultiply.apply(x, self.layer_wise_gradient_decay_ratio)
             dropout_probability = np.random.random()
             if not self.training or (dropout_probability > self.layerdrop):
-                x, z, pos_bias = layer(x, self_attn_padding_mask=padding_mask, need_weights=False, pos_bias=pos_bias)
+                x, z, pos_bias = layer(
+                    x, self_attn_padding_mask=padding_mask, need_weights=False, pos_bias=pos_bias)
             if tgt_layer is not None:
                 layer_results.append((x, z))
             if i == tgt_layer:
@@ -2888,6 +3009,7 @@ class TransformerEncoder(nn.Module):
         x = x.transpose(0, 1)
 
         return x, layer_results
+
 
 class TransformerSentenceEncoderLayer(nn.Module):
     def __init__(
@@ -2937,7 +3059,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.self_attn_layer_norm = LayerNorm(self.embedding_dim)
 
         if self.activation_name == "glu":
-            self.fc1 = GLU_Linear(self.embedding_dim, ffn_embedding_dim, "swish")
+            self.fc1 = GLU_Linear(self.embedding_dim,
+                                  ffn_embedding_dim, "swish")
         else:
             self.fc1 = nn.Linear(self.embedding_dim, ffn_embedding_dim)
         self.fc2 = nn.Linear(ffn_embedding_dim, self.embedding_dim)
@@ -3059,7 +3182,7 @@ class MultiheadAttention(nn.Module):
         self.q_head_dim = self.head_dim
         self.k_head_dim = self.head_dim
         assert (
-                self.head_dim * num_heads == self.embed_dim
+            self.head_dim * num_heads == self.embed_dim
         ), "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
@@ -3078,13 +3201,15 @@ class MultiheadAttention(nn.Module):
         q_embed_dim = embed_dim
 
         self.k_proj = quant_noise(
-            nn.Linear(self.kdim, k_embed_dim, bias=k_bias), q_noise, qn_block_size
+            nn.Linear(self.kdim, k_embed_dim,
+                      bias=k_bias), q_noise, qn_block_size
         )
         self.v_proj = quant_noise(
             nn.Linear(self.vdim, embed_dim, bias=bias), q_noise, qn_block_size
         )
         self.q_proj = quant_noise(
-            nn.Linear(embed_dim, q_embed_dim, bias=bias), q_noise, qn_block_size
+            nn.Linear(embed_dim, q_embed_dim,
+                      bias=bias), q_noise, qn_block_size
         )
 
         self.out_proj = quant_noise(
@@ -3135,35 +3260,42 @@ class MultiheadAttention(nn.Module):
 
         if bidirectional:
             num_buckets = num_buckets // 2
-            relative_buckets += (relative_positions > 0).to(torch.long) * num_buckets
+            relative_buckets += (relative_positions >
+                                 0).to(torch.long) * num_buckets
             relative_positions = torch.abs(relative_positions)
         else:
-            relative_positions = -torch.min(relative_positions, torch.zeros_like(relative_positions))
+            relative_positions = - \
+                torch.min(relative_positions,
+                          torch.zeros_like(relative_positions))
 
         max_exact = num_buckets // 2
         is_small = relative_positions < max_exact
 
         relative_postion_if_large = max_exact + (
-                torch.log(relative_positions.float() / max_exact)
-                / math.log(max_distance / max_exact)
-                * (num_buckets - max_exact)
+            torch.log(relative_positions.float() / max_exact)
+            / math.log(max_distance / max_exact)
+            * (num_buckets - max_exact)
         ).to(torch.long)
         relative_postion_if_large = torch.min(
-            relative_postion_if_large, torch.full_like(relative_postion_if_large, num_buckets - 1)
+            relative_postion_if_large, torch.full_like(
+                relative_postion_if_large, num_buckets - 1)
         )
 
-        relative_buckets += torch.where(is_small, relative_positions, relative_postion_if_large)
+        relative_buckets += torch.where(is_small,
+                                        relative_positions, relative_postion_if_large)
         return relative_buckets
 
     def compute_bias(self, query_length, key_length):
-        context_position = torch.arange(query_length, dtype=torch.long)[:, None]
+        context_position = torch.arange(
+            query_length, dtype=torch.long)[:, None]
         memory_position = torch.arange(key_length, dtype=torch.long)[None, :]
         relative_position = memory_position - context_position
         relative_position_bucket = self._relative_positions_bucket(
             relative_position,
             bidirectional=True
         )
-        relative_position_bucket = relative_position_bucket.to(self.relative_attention_bias.weight.device)
+        relative_position_bucket = relative_position_bucket.to(
+            self.relative_attention_bias.weight.device)
         values = self.relative_attention_bias(relative_position_bucket)
         values = values.permute([2, 0, 1])
         return values
@@ -3174,7 +3306,8 @@ class MultiheadAttention(nn.Module):
             key: Optional[Tensor],
             value: Optional[Tensor],
             key_padding_mask: Optional[Tensor] = None,
-            incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+            incremental_state: Optional[Dict[str,
+                                             Dict[str, Optional[Tensor]]]] = None,
             need_weights: bool = True,
             static_kv: bool = False,
             attn_mask: Optional[Tensor] = None,
@@ -3217,7 +3350,8 @@ class MultiheadAttention(nn.Module):
 
         if self.has_relative_attention_bias and position_bias is None:
             position_bias = self.compute_bias(tgt_len, src_len)
-            position_bias = position_bias.unsqueeze(0).repeat(bsz, 1, 1, 1).view(bsz * self.num_heads, tgt_len, src_len)
+            position_bias = position_bias.unsqueeze(0).repeat(
+                bsz, 1, 1, 1).view(bsz * self.num_heads, tgt_len, src_len)
 
         if incremental_state is not None:
             saved_state = self._get_input_buffer(incremental_state)
@@ -3265,27 +3399,28 @@ class MultiheadAttention(nn.Module):
                 key_padding_mask = torch.cat(
                     [
                         key_padding_mask,
-                        key_padding_mask.new_zeros(key_padding_mask.size(0), 1),
+                        key_padding_mask.new_zeros(
+                            key_padding_mask.size(0), 1),
                     ],
                     dim=1,
                 )
 
         q = (
             q.contiguous()
-                .view(tgt_len, bsz * self.num_heads, self.q_head_dim)
-                .transpose(0, 1)
+            .view(tgt_len, bsz * self.num_heads, self.q_head_dim)
+            .transpose(0, 1)
         )
         if k is not None:
             k = (
                 k.contiguous()
-                    .view(-1, bsz * self.num_heads, self.k_head_dim)
-                    .transpose(0, 1)
+                .view(-1, bsz * self.num_heads, self.k_head_dim)
+                .transpose(0, 1)
             )
         if v is not None:
             v = (
                 v.contiguous()
-                    .view(-1, bsz * self.num_heads, self.head_dim)
-                    .transpose(0, 1)
+                .view(-1, bsz * self.num_heads, self.head_dim)
+                .transpose(0, 1)
             )
 
         if saved_state is not None:
@@ -3293,7 +3428,8 @@ class MultiheadAttention(nn.Module):
             if "prev_key" in saved_state:
                 _prev_key = saved_state["prev_key"]
                 assert _prev_key is not None
-                prev_key = _prev_key.view(bsz * self.num_heads, -1, self.head_dim)
+                prev_key = _prev_key.view(
+                    bsz * self.num_heads, -1, self.head_dim)
                 if static_kv:
                     k = prev_key
                 else:
@@ -3303,7 +3439,8 @@ class MultiheadAttention(nn.Module):
             if "prev_value" in saved_state:
                 _prev_value = saved_state["prev_value"]
                 assert _prev_value is not None
-                prev_value = _prev_value.view(bsz * self.num_heads, -1, self.head_dim)
+                prev_value = _prev_value.view(
+                    bsz * self.num_heads, -1, self.head_dim)
                 if static_kv:
                     v = prev_value
                 else:
@@ -3321,12 +3458,15 @@ class MultiheadAttention(nn.Module):
                 static_kv=static_kv,
             )
 
-            saved_state["prev_key"] = k.view(bsz, self.num_heads, -1, self.head_dim)
-            saved_state["prev_value"] = v.view(bsz, self.num_heads, -1, self.head_dim)
+            saved_state["prev_key"] = k.view(
+                bsz, self.num_heads, -1, self.head_dim)
+            saved_state["prev_value"] = v.view(
+                bsz, self.num_heads, -1, self.head_dim)
             saved_state["prev_key_padding_mask"] = key_padding_mask
             # In this branch incremental_state is never None
             assert incremental_state is not None
-            incremental_state = self._set_input_buffer(incremental_state, saved_state)
+            incremental_state = self._set_input_buffer(
+                incremental_state, saved_state)
         assert k is not None
         assert k.size(1) == src_len
 
@@ -3342,8 +3482,10 @@ class MultiheadAttention(nn.Module):
         if self.add_zero_attn:
             assert v is not None
             src_len += 1
-            k = torch.cat([k, k.new_zeros((k.size(0), 1) + k.size()[2:])], dim=1)
-            v = torch.cat([v, v.new_zeros((v.size(0), 1) + v.size()[2:])], dim=1)
+            k = torch.cat(
+                [k, k.new_zeros((k.size(0), 1) + k.size()[2:])], dim=1)
+            v = torch.cat(
+                [v, v.new_zeros((v.size(0), 1) + v.size()[2:])], dim=1)
             if attn_mask is not None:
                 attn_mask = torch.cat(
                     [attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1
@@ -3360,10 +3502,13 @@ class MultiheadAttention(nn.Module):
                 )
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        attn_weights = (attn_weights - attn_weights.max(dim=-1, keepdim=True)[0]) * alpha
-        attn_weights = self.apply_sparse_mask(attn_weights, tgt_len, src_len, bsz)
+        attn_weights = (attn_weights - attn_weights.max(dim=-
+                        1, keepdim=True)[0]) * alpha
+        attn_weights = self.apply_sparse_mask(
+            attn_weights, tgt_len, src_len, bsz)
 
-        assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
+        assert list(attn_weights.size()) == [
+            bsz * self.num_heads, tgt_len, src_len]
 
         if attn_mask is not None:
             attn_mask = attn_mask.unsqueeze(0)
@@ -3371,7 +3516,8 @@ class MultiheadAttention(nn.Module):
 
         if key_padding_mask is not None:
             # don't attend to padding symbols
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights.view(
+                bsz, self.num_heads, tgt_len, src_len)
             if not is_tpu:
                 attn_weights = attn_weights.masked_fill(
                     key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool),
@@ -3379,9 +3525,11 @@ class MultiheadAttention(nn.Module):
                 )
             else:
                 attn_weights = attn_weights.transpose(0, 2)
-                attn_weights = attn_weights.masked_fill(key_padding_mask, float("-inf"))
+                attn_weights = attn_weights.masked_fill(
+                    key_padding_mask, float("-inf"))
                 attn_weights = attn_weights.transpose(0, 2)
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights.view(
+                bsz * self.num_heads, tgt_len, src_len)
 
         if before_softmax:
             return attn_weights, v, position_bias
@@ -3389,12 +3537,14 @@ class MultiheadAttention(nn.Module):
         if position_bias is not None:
             attn_mask_rel_pos = position_bias
             if self.gru_rel_pos == 1:
-                query_layer = q.view(bsz, self.num_heads, tgt_len, self.q_head_dim) * alpha / self.scaling
+                query_layer = q.view(
+                    bsz, self.num_heads, tgt_len, self.q_head_dim) * alpha / self.scaling
                 _B, _H, _L, __ = query_layer.size()
                 gate_a, gate_b = torch.sigmoid(self.grep_linear(query_layer).view(
                     _B, _H, _L, 2, 4).sum(-1, keepdim=False)).chunk(2, dim=-1)
                 gate_a_1 = gate_a * (gate_b * self.grep_a - 1.0) + 2.0
-                attn_mask_rel_pos = gate_a_1.view(bsz * self.num_heads, tgt_len, 1) * position_bias
+                attn_mask_rel_pos = gate_a_1.view(
+                    bsz * self.num_heads, tgt_len, 1) * position_bias
 
             attn_mask_rel_pos = attn_mask_rel_pos.view(attn_weights.size())
 
@@ -3408,7 +3558,8 @@ class MultiheadAttention(nn.Module):
 
         assert v is not None
         attn = torch.bmm(attn_probs, v)
-        assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
+        assert list(attn.size()) == [
+            bsz * self.num_heads, tgt_len, self.head_dim]
         attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
         attn = self.out_proj(attn)
         attn_weights: Optional[Tensor] = None
@@ -3521,7 +3672,6 @@ def init_bert_params(module):
         normal_(module.v_proj.weight.data)
 
 
-
 class GradMultiply(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, scale):
@@ -3583,9 +3733,11 @@ class GLU_Linear(nn.Module):
         x = self.linear(x)
 
         if self.glu_type == "bilinear":
-            x = (x[:, :, 0:self.output_dim] * x[:, :, self.output_dim:self.output_dim * 2])
+            x = (x[:, :, 0:self.output_dim] *
+                 x[:, :, self.output_dim:self.output_dim * 2])
         else:
-            x = (x[:, :, 0:self.output_dim] * self.glu_act(x[:, :, self.output_dim:self.output_dim * 2]))
+            x = (x[:, :, 0:self.output_dim] *
+                 self.glu_act(x[:, :, self.output_dim:self.output_dim * 2]))
 
         return x
 
@@ -3594,7 +3746,8 @@ def gelu_accurate(x):
     if not hasattr(gelu_accurate, "_a"):
         gelu_accurate._a = math.sqrt(2 / math.pi)
     return (
-        0.5 * x * (1 + torch.tanh(gelu_accurate._a * (x + 0.044715 * torch.pow(x, 3))))
+        0.5 * x * (1 + torch.tanh(gelu_accurate._a *
+                   (x + 0.044715 * torch.pow(x, 3))))
     )
 
 
@@ -3623,7 +3776,8 @@ def get_activation_fn(activation: str):
     elif activation == "glu":
         return lambda x: x
     else:
-        raise RuntimeError("--activation-fn {} not supported".format(activation))
+        raise RuntimeError(
+            "--activation-fn {} not supported".format(activation))
 
 
 def quant_noise(module, p, block_size):
@@ -3688,7 +3842,8 @@ def quant_noise(module, p, block_size):
                     in_features // block_size * out_features, device=weight.device
                 )
                 mask.bernoulli_(p)
-                mask = mask.repeat_interleave(block_size, -1).view(-1, in_features)
+                mask = mask.repeat_interleave(
+                    block_size, -1).view(-1, in_features)
 
             else:
                 # gather weight and sizes
@@ -3703,7 +3858,8 @@ def quant_noise(module, p, block_size):
                         device=weight.device,
                     )
                     mask.bernoulli_(p)
-                    mask = mask.repeat_interleave(block_size, -1).view(-1, in_channels)
+                    mask = mask.repeat_interleave(
+                        block_size, -1).view(-1, in_channels)
                 else:
                     mask = torch.zeros(
                         weight.size(0), weight.size(1), device=weight.device
@@ -3744,22 +3900,27 @@ class TokenizersConfig:
         # dropouts
         self.dropout: float = 0.1  # dropout probability for the transformer
         self.attention_dropout: float = 0.1  # dropout probability for attention weights
-        self.activation_dropout: float = 0.0  # dropout probability after activation in FFN
-        self.encoder_layerdrop: float = 0.0  # probability of dropping a tarnsformer layer
-        self.dropout_input: float = 0.0  # dropout to apply to the input (after feat extr)
+        # dropout probability after activation in FFN
+        self.activation_dropout: float = 0.0
+        # probability of dropping a tarnsformer layer
+        self.encoder_layerdrop: float = 0.0
+        # dropout to apply to the input (after feat extr)
+        self.dropout_input: float = 0.0
 
         # positional embeddings
         self.conv_pos: int = 128  # number of filters for convolutional positional embeddings
-        self.conv_pos_groups: int = 16  # number of groups for convolutional positional embedding
+        # number of groups for convolutional positional embedding
+        self.conv_pos_groups: int = 16
 
         # relative position embedding
-        self.relative_position_embedding: bool = False  # apply relative position embedding
+        # apply relative position embedding
+        self.relative_position_embedding: bool = False
         self.num_buckets: int = 320  # number of buckets for relative position embedding
         self.max_distance: int = 1280  # maximum distance for relative position embedding
         self.gru_rel_pos: bool = False  # apply gated relative position embedding
 
         # quantizer
-        self.quant_n: int = 1024 # codebook number in quantizer
+        self.quant_n: int = 1024  # codebook number in quantizer
         self.quant_dim: int = 256    # codebook dimension in quantizer
 
         if cfg is not None:
@@ -3829,7 +3990,8 @@ class Tokenizers(nn.Module):
         fbanks = []
         for waveform in source:
             waveform = waveform.unsqueeze(0) * 2 ** 15
-            fbank = ta_kaldi.fbank(waveform, num_mel_bins=128, sample_frequency=16000, frame_length=25, frame_shift=10)
+            fbank = ta_kaldi.fbank(
+                waveform, num_mel_bins=128, sample_frequency=16000, frame_length=25, frame_shift=10)
             fbanks.append(fbank)
         fbank = torch.stack(fbanks, dim=0)
         fbank = (fbank - fbank_mean) / (2 * fbank_std)
@@ -3842,7 +4004,8 @@ class Tokenizers(nn.Module):
             fbank_mean: float = 15.41663,
             fbank_std: float = 6.55582,
     ):
-        fbank = self.preprocess(source, fbank_mean=fbank_mean, fbank_std=fbank_std)
+        fbank = self.preprocess(
+            source, fbank_mean=fbank_mean, fbank_std=fbank_std)
 
         if padding_mask is not None:
             padding_mask = self.forward_padding_mask(fbank, padding_mask)
@@ -3901,7 +4064,7 @@ def kmeans(samples, num_clusters, num_iters=10, use_cosine_sim=False):
             dists = samples @ means.t()
         else:
             diffs = rearrange(samples, 'n d -> n () d') \
-                    - rearrange(means, 'c d -> () c d')
+                - rearrange(means, 'c d -> () c d')
             dists = -(diffs ** 2).sum(dim=-1)
 
         buckets = dists.max(dim=-1).indices
@@ -3937,12 +4100,14 @@ class EmbeddingEMA(nn.Module):
             self.register_buffer('initted', torch.Tensor([not kmeans_init]))
         else:
             print(f"load init codebook weight from {codebook_init_path}")
-            codebook_ckpt_weight = torch.load(codebook_init_path, map_location='cpu')
+            codebook_ckpt_weight = torch.load(
+                codebook_init_path, map_location='cpu')
             weight = codebook_ckpt_weight.clone()
             self.register_buffer('initted', torch.Tensor([True]))
 
         self.weight = nn.Parameter(weight, requires_grad=False)
-        self.cluster_size = nn.Parameter(torch.zeros(num_tokens), requires_grad=False)
+        self.cluster_size = nn.Parameter(
+            torch.zeros(num_tokens), requires_grad=False)
         self.embed_avg = nn.Parameter(weight.clone(), requires_grad=False)
         # self.register_buffer('initted', torch.Tensor([not kmeans_init]))
         self.update = True
@@ -3952,7 +4117,8 @@ class EmbeddingEMA(nn.Module):
         if self.initted:
             return
         print("Performing Kemans init for codebook")
-        embed, cluster_size = kmeans(data, self.num_tokens, 10, use_cosine_sim=True)
+        embed, cluster_size = kmeans(
+            data, self.num_tokens, 10, use_cosine_sim=True)
         self.weight.data.copy_(embed)
         self.cluster_size.data.copy_(cluster_size)
         self.initted.data.copy_(torch.Tensor([True]))
@@ -3961,15 +4127,17 @@ class EmbeddingEMA(nn.Module):
         return F.embedding(embed_id, self.weight)
 
     def cluster_size_ema_update(self, new_cluster_size):
-        self.cluster_size.data.mul_(self.decay).add_(new_cluster_size, alpha=1 - self.decay)
+        self.cluster_size.data.mul_(self.decay).add_(
+            new_cluster_size, alpha=1 - self.decay)
 
     def embed_avg_ema_update(self, new_embed_avg):
-        self.embed_avg.data.mul_(self.decay).add_(new_embed_avg, alpha=1 - self.decay)
+        self.embed_avg.data.mul_(self.decay).add_(
+            new_embed_avg, alpha=1 - self.decay)
 
     def weight_update(self, num_tokens):
         n = self.cluster_size.sum()
         smoothed_cluster_size = (
-                (self.cluster_size + self.eps) / (n + num_tokens * self.eps) * n
+            (self.cluster_size + self.eps) / (n + num_tokens * self.eps) * n
         )
         # normalize embedding average with smoothed cluster size
         embed_normalized = self.embed_avg / smoothed_cluster_size.unsqueeze(1)
@@ -3992,13 +4160,15 @@ class NormEMAVectorQuantizer(nn.Module):
         self.decay = decay
 
         # learnable = True if orthogonal_reg_weight > 0 else False
-        self.embedding = EmbeddingEMA(self.num_tokens, self.codebook_dim, decay, eps, kmeans_init, codebook_init_path)
+        self.embedding = EmbeddingEMA(
+            self.num_tokens, self.codebook_dim, decay, eps, kmeans_init, codebook_init_path)
 
         self.statistic_code_usage = statistic_code_usage
         if statistic_code_usage:
             self.register_buffer('cluster_size', torch.zeros(n_embed))
         if distributed.is_available() and distributed.is_initialized():
-            print("ddp is enable, so use ddp_reduce to sync the statistic_code_usage for each gpu!")
+            print(
+                "ddp is enable, so use ddp_reduce to sync the statistic_code_usage for each gpu!")
             self.all_reduce_fn = distributed.all_reduce
         else:
             self.all_reduce_fn = nn.Identity()
@@ -4020,7 +4190,8 @@ class NormEMAVectorQuantizer(nn.Module):
 
         d = z_flattened.pow(2).sum(dim=1, keepdim=True) + \
             self.embedding.weight.pow(2).sum(dim=1) - 2 * \
-            torch.einsum('bd,nd->bn', z_flattened, self.embedding.weight)  # 'n d -> d n'
+            torch.einsum('bd,nd->bn', z_flattened,
+                         self.embedding.weight)  # 'n d -> d n'
 
         encoding_indices = torch.argmin(d, dim=1)
 
@@ -4054,7 +4225,8 @@ class NormEMAVectorQuantizer(nn.Module):
 
             embed_normalized = torch.where(zero_mask[..., None], self.embedding.weight,
                                            embed_normalized)
-            norm_ema_inplace(self.embedding.weight, embed_normalized, self.decay)
+            norm_ema_inplace(self.embedding.weight,
+                             embed_normalized, self.decay)
 
         # compute loss for embedding
         loss = self.beta * F.mse_loss(z_q.detach(), z)
