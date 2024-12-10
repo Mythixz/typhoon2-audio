@@ -1194,26 +1194,47 @@ class Typhoon2Audio2AudioForConditionalGeneration(Typhoon2AudioForConditionalGen
             output_ids, add_special_tokens=False, skip_special_tokens=True)[0]
 
         # wav
-        output_units = self.ctc_postprocess(
-            output_units, blank=self.config.unit_vocab_size)
-        output_units = [(list(map(int, output_units.strip().split())))]
+        output_audio = self.ctc_pred_to_audio(output_units)
 
-        # vocoder
-        if hasattr(self, 'vocoder'):
-            output_units_tensor = torch.tensor(
-                output_units, dtype=torch.int64, device=self.device)
-            output_audio = self.vocoder({"code": output_units_tensor}, True)
-            output_audio = output_audio.detach().cpu().numpy()
-        else:
-            output_audio = None
-        output_audio = {
-            "array": output_audio,
-            "sampling_rate": self.config.vocoder_config['sampling_rate']
-        }
         return {
             "text": output_text,
             "unit": output_units,
             "audio": output_audio
+        }
+
+    @torch.no_grad()
+    def synthesize_speech(
+        self,
+        text,
+    ):
+        # apply chat template adds (supposed to be) unnecessary tokens
+        # however, this wa applied during training, so it should be added here
+        # in the next version, please consider removing `apply_chat_template`
+        text_ = self.llama_tokenizer.apply_chat_template(
+            [{'role': 'assistant', 'content': text}], tokenize=False)
+
+        inputs = self.llama_tokenizer(text_, return_tensors="pt").to(self.device)
+        outputs = self(**inputs)
+        hidden_states = outputs['hidden_states'][-1]
+        ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
+        output_audio = self.ctc_pred_to_audio(ctc_pred)
+        return output_audio
+
+    def ctc_pred_to_audio(self, units):
+        # vocoder
+        if hasattr(self, 'vocoder'):
+            units = self.ctc_postprocess(
+                units, blank=self.config.unit_vocab_size)
+            units = [(list(map(int, units.strip().split())))]
+            units_tensor = torch.tensor(units, dtype=torch.int64, device=self.device)
+            audio_arr = self.vocoder({"code": units_tensor}, True)
+            audio_arr = audio_arr.detach().cpu().numpy()
+        else:
+            audio_arr = None
+
+        return {
+            "array": audio_arr,
+            "sampling_rate": self.config.vocoder_config['sampling_rate']
         }
 
     def ctc_postprocess(self, tokens, blank):
