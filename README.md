@@ -39,6 +39,7 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 - [ ] Allow multi-turn for `.generate()` for `Typhoon2AudioForConditionalGeneration`
 - [ ] Allow multi-turn for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Add TTS functionality to `Typhoon2Audio2AudioForConditionalGeneration`
+- [ ] Move prompt pattern to Qwen2-Audio input style: https://github.com/vllm-project/vllm/pull/9248
 - [ ] Write doc & method string
 - [ ] Allow flash_attention for LLM
 - [ ] Allow `device_map="auto"`
