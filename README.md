@@ -7,7 +7,7 @@ The repository of Typhoon2-Audio, Thai audio-language model that supports speech
 # load model
 from transformers import AutoModel
 model = AutoModel.from_pretrained(
-    "save_weights/llama3.1-typhoon2-audio-8b-instruct-241210/",
+    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
     torch_dtype=torch.float16, 
     trust_remote_code=True
 )
