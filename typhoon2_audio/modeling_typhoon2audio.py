@@ -977,6 +977,7 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
     def _convert_conv_to_embeds(self, conversation_list: List, speech_embeds: List):
         embeds = []
         speech_embeds_keys = [speech["audio_url"] for speech in speech_embeds]
+
         for item in conversation_list:
             if item in speech_embeds_keys:
                 selected = [
@@ -984,15 +985,15 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
                     for speech in speech_embeds
                     if speech["audio_url"] == item
                 ][0]
+                selected = selected.to(self.device)
                 embeds.append(selected)
             else:
-                embeds.append(
-                    self.llama_model.model.embed_tokens(
-                        self.llama_tokenizer(
-                            item, return_tensors="pt", add_special_tokens=False
-                        ).input_ids
-                    )
-                )
+                tokenized = self.llama_tokenizer(
+                    item, return_tensors="pt", add_special_tokens=False
+                ).input_ids.to(self.device)
+                token_embeds = self.llama_model.model.embed_tokens(tokenized)
+                embeds.append(token_embeds)
+
         return embeds
 
     def encode_speech_with_text(self, conversation: List):
