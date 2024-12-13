@@ -67,7 +67,10 @@ print("passed: test single-turn")
 
 
 conversation2_multi_turn = [
-    {"role": "system", "content": "You are a helpful female assistant named ไต้ฝุ่น. Respond conversationally to the speech provided in the language it is spoken in."},
+    {
+        "role": "system",
+        "content": "You are a helpful female assistant named ไต้ฝุ่น. Respond conversationally to the speech provided in the language it is spoken in.",
+    },
     {
         "role": "user",
         "content": [
@@ -79,7 +82,7 @@ conversation2_multi_turn = [
                 "type": "text",
                 "text": "",
             },
-        ],  
+        ],
     },
     {
         "role": "assistant",
@@ -88,7 +91,7 @@ conversation2_multi_turn = [
                 "type": "text",
                 "text": "โอเคค่ะ, ฉันจะบอกชื่อเมืองใหญ่ๆ ในอเมริกาให้คุณฟัง:\n\n1. นิวยอร์ก\n2. ลอสแอนเจลิส\n3. ชิคาโก\n4. ฮิวสตัน\n5. ฟิลาเดลเฟีย\n6. บอสตัน\n7. ซานฟรานซิสโก\n8. วอชิงตัน ดี.ซี. (Washington D.C.)\n9. แอตแลนต้า\n10. ซีแอตเทิล\n\nถ้าคุณต้องการข้อมูลเพิ่มเติมหรือมีคำถามอื่นๆ กรุณาถามได้เลยค่ะ'",
             },
-        ],  
+        ],
     },
     {
         "role": "user",
@@ -97,11 +100,7 @@ conversation2_multi_turn = [
                 "type": "audio",
                 "audio_url": "examples/tmp-2284cd76e1c875525ff75327a2fc3610.wav",
             },
-            {
-                "type": "text",
-                "text": "",
-            },
-        ],  
+        ],
     },
 ]
 x = model.generate(conversation=conversation2_multi_turn)
@@ -109,5 +108,7 @@ x = model.generate(conversation=conversation2_multi_turn)
 print(x)
 print("passed: test multi-turn")
 
-import ipdb; ipdb.set_trace()
+import ipdb
+
+ipdb.set_trace()
 print("finish testing generate")

@@ -934,11 +934,13 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         for content in content_list:
             if content["type"] == "text":
                 return content["text"]
+        return ""
 
     def _get_audio_from_content_list(self, content_list: List):
         for content in content_list:
             if content["type"] == "audio":
                 return f"<Speech>{content['audio_url']}</Speech> "
+        return ""
 
     def _get_audio_url_from_string(self, content: str):
         return content.split("<Speech>")[1].split("</Speech>")[0]
