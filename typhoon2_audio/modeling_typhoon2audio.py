@@ -929,64 +929,95 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         speech_embeds = self.speech_llama_proj(query_output.last_hidden_state)
         speech_embeds = speech_embeds.view(B, -1, speech_embeds.size(2)).contiguous()
         return speech_embeds
-    
+
     def _get_text_from_content_list(self, content_list: List):
         for content in content_list:
             if content["type"] == "text":
                 return content["text"]
-            
+
     def _get_audio_from_content_list(self, content_list: List):
         for content in content_list:
             if content["type"] == "audio":
-                return f"<Speech>{content["audio_url"]}</Speech> "
-            
+                return f"<Speech>{content['audio_url']}</Speech> "
+
     def _get_audio_url_from_string(self, content: str):
         return content.split("<Speech>")[1].split("</Speech>")[0]
-            
-    def _filter_only_audio_content(self, content_list: List):
-        return [self._get_audio_url_from_string(content) for content in content_list if "<Speech>" in content]
-    
-    def _split_conversation_by_speech(self, conversation_str: str):
-            intermediate_list = [conversation_str]
-            if '<Speech>' in conversation_str:
-                result = conversation_str.split('<Speech>')
-                intermediate_list = [item + ('<Speech>' if i < len(result)-1 else '') for i, item in enumerate(result)]
 
-            processed_list = []
-            for item in intermediate_list:
-                if "</Speech>" in item:
-                    parts = item.split("</Speech>")
-                    file_path = parts[0]
-                    remaining_context = "</Speech>" + parts[1] if len(parts) > 1 else "</Speech>"
-                    
-                    processed_list.extend([file_path, remaining_context])
-                else:
-                    processed_list.append(item)
-            
-            return processed_list
-    
+    def _filter_only_audio_content(self, content_list: List):
+        return [
+            self._get_audio_url_from_string(content)
+            for content in content_list
+            if "<Speech>" in content
+        ]
+
+    def _split_conversation_by_speech(self, conversation_str: str):
+        intermediate_list = [conversation_str]
+        if "<Speech>" in conversation_str:
+            result = conversation_str.split("<Speech>")
+            intermediate_list = [
+                item + ("<Speech>" if i < len(result) - 1 else "")
+                for i, item in enumerate(result)
+            ]
+
+        processed_list = []
+        for item in intermediate_list:
+            if "</Speech>" in item:
+                parts = item.split("</Speech>")
+                file_path = parts[0]
+                remaining_context = (
+                    "</Speech>" + parts[1] if len(parts) > 1 else "</Speech>"
+                )
+
+                processed_list.extend([file_path, remaining_context])
+            else:
+                processed_list.append(item)
+
+        return processed_list
+
     def _convert_conv_to_embeds(self, conversation_list: List, speech_embeds: List):
         embeds = []
         speech_embeds_keys = [speech["audio_url"] for speech in speech_embeds]
         for item in conversation_list:
             if item in speech_embeds_keys:
-                selected = [speech["audio"] for speech in speech_embeds if speech["audio_url"] == item][0]
+                selected = [
+                    speech["audio"]
+                    for speech in speech_embeds
+                    if speech["audio_url"] == item
+                ][0]
                 embeds.append(selected)
             else:
-                embeds.append(self.llama_model.model.embed_tokens(self.llama_tokenizer(item, return_tensors="pt", add_special_tokens=False).input_ids))
+                embeds.append(
+                    self.llama_model.model.embed_tokens(
+                        self.llama_tokenizer(
+                            item, return_tensors="pt", add_special_tokens=False
+                        ).input_ids
+                    )
+                )
         return embeds
 
-    def encode_speech_with_text(self, conversation: List):        
+    def encode_speech_with_text(self, conversation: List):
         converted_conversation = [
-            f"<|start_header_id|>{msg["role"]}<|end_header_id|>\n\n{msg["content"] if not isinstance(msg["content"], list) else self._get_audio_from_content_list(msg["content"]) + self._get_text_from_content_list(msg["content"])}<|eot_id|>"
+            f"<|start_header_id|>{msg['role']}<|end_header_id|>\n\n{msg['content'] if not isinstance(msg['content'], list) else self._get_audio_from_content_list(msg['content']) + self._get_text_from_content_list(msg['content'])}<|eot_id|>"
             for msg in conversation
         ]
-        conversation_str = "".join(converted_conversation) + "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        conversation_str = (
+            "".join(converted_conversation)
+            + "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        )
         conversation_list = self._split_conversation_by_speech(conversation_str)
 
-        speech_list = [{"audio_url": audio, "audio": self.encode_speech_only(sf.read(audio))} for audio in self._filter_only_audio_content(converted_conversation)]
-        speech_embeds = [{"audio_url": speech["audio_url"], "audio": self.encode_speech_only(speech["audio"])} for speech in speech_list]
-        
+        speech_list = [
+            {"audio_url": audio, "audio": self.encode_speech_only(sf.read(audio))}
+            for audio in self._filter_only_audio_content(converted_conversation)
+        ]
+        speech_embeds = [
+            {
+                "audio_url": speech["audio_url"],
+                "audio": self.encode_speech_only(speech["audio"]),
+            }
+            for speech in speech_list
+        ]
+
         bos_embeds = self.llama_model.model.embed_tokens(
             torch.ones(
                 [1, 1],
@@ -996,11 +1027,11 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             * self.llama_tokenizer.bos_token_id
         )
 
-        embed_list = [bos_embeds] + self._convert_conv_to_embeds(conversation_list, speech_embeds)
-
-        embeds = torch.cat(
-            embed_list, dim=1
+        embed_list = [bos_embeds] + self._convert_conv_to_embeds(
+            conversation_list, speech_embeds
         )
+
+        embeds = torch.cat(embed_list, dim=1)
         atts = torch.ones(embeds.size()[:-1], dtype=torch.long).to(embeds.device)
         return embeds, atts
 
@@ -1305,9 +1336,7 @@ class Typhoon2Audio2AudioForConditionalGeneration(
 
         if "conversation" in kwargs and inputs_embeds is None:
             conversation = kwargs["conversation"]
-            inputs_embeds, attention_mask = self.encode_speech_with_text(
-                conversation
-            )
+            inputs_embeds, attention_mask = self.encode_speech_with_text(conversation)
 
         outputs = GenerationWithCTC.generate(
             self,
