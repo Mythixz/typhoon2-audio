@@ -3,23 +3,90 @@ The repository of Typhoon2-Audio, Thai audio-language model that supports speech
 
 ## Usage
 
+### Load Model
 ```python
-# load model
+import torch
 from transformers import AutoModel
 model = AutoModel.from_pretrained(
     "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
     torch_dtype=torch.float16, 
     trust_remote_code=True
 )
+```
 
-# inference
-prompt_pattern="<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant named ไต้ฝุ่น.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n<Speech><SpeechHere></Speech> {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-prompt="Respond conversationally to the speech provided.",
-audio, sr = sf.read("speech_input.wav")
-x = model.generate(audio=audio, prompt=prompt, prompt_pattern=prompt_pattern)
+### Inference - Single turn example
+```python
+conversation = [
+    {"role": "system", "content": "You are a helpful female assistant named ไต้ฝุ่น."},
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "audio",
+                "audio_url": "examples/tmp-2860cd0a094b64043226167340af03a3.wav",
+            },
+            {"type": "text", "text": "Transcribe this audio"},
+        ],
+    },
+]
+x = model.generate(conversation=conversation)
 # x => x['text'] (text), x['audio'] (numpy array)
+# to save the audio output
+# import soundfile as sf
+# sf.write("examples/speechout.wav", x["audio"]["array"], x["audio"]["sampling_rate"])
+```
 
-# TTS functionality
+### Inference - Multi turn example
+```python
+conversation_multi_turn = [
+    {
+        "role": "system",
+        "content": "You are a helpful female assistant named ไต้ฝุ่น. Respond conversationally to the speech provided in the language it is spoken in.",
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "audio",
+                "audio_url": "examples/tmp-2860cd0a094b64043226167340af03a3.wav",
+                # บอกชื่อเมืองใหญ่ๆในอเมริกามาให้หน่อยสิ -- "List some names of US cities"
+            },
+            {
+                "type": "text",
+                "text": "",
+            },
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "โอเคค่ะ, ฉันจะบอกชื่อเมืองใหญ่ๆ ในอเมริกาให้คุณฟัง:\n\n1. นิวยอร์ก\n2. ลอสแอนเจลิส\n3. ชิคาโก\n4. ฮิวสตัน\n5. ฟิลาเดลเฟีย\n6. บอสตัน\n7. ซานฟรานซิสโก\n8. วอชิงตัน ดี.ซี. (Washington D.C.)\n9. แอตแลนต้า\n10. ซีแอตเทิล\n\nถ้าคุณต้องการข้อมูลเพิ่มเติมหรือมีคำถามอื่นๆ กรุณาถามได้เลยค่ะ'",
+            },
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "audio",
+                "audio_url": "examples/tmp-2284cd76e1c875525ff75327a2fc3610.wav",
+                # แล้วถ้าเป็นประเทศอังกฤษล่ะ -- "How about the UK"
+
+            },
+        ],
+    },
+]
+x = model.generate(conversation=conversation_multi_turn)
+# x => x['text'] (text), x['audio'] (numpy array)
+# to save the audio output
+# import soundfile as sf
+# sf.write("examples/speechout.wav", x["audio"]["array"], x["audio"]["sampling_rate"])
+```
+
+### TTS functionality
+```python
 y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a language model specialized in Thai")
 # y => numpy array
 ```
