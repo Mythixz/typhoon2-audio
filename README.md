@@ -8,10 +8,11 @@ The repository of Typhoon2-Audio, Thai audio-language model that supports speech
 import torch
 from transformers import AutoModel
 model = AutoModel.from_pretrained(
-    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
+    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241213",
     torch_dtype=torch.float16, 
     trust_remote_code=True
 )
+model.to("cuda")
 ```
 
 ### Inference - Single turn example
@@ -29,7 +30,16 @@ conversation = [
         ],
     },
 ]
-x = model.generate(conversation=conversation)
+x = model.generate(
+    conversation=conversation,
+    max_new_tokens=500,
+    do_sample=True,
+    num_beams=1,
+    top_p=0.9,
+    repetition_penalty=1.0,
+    length_penalty=1.0,
+    temperature=0.7,
+)
 # x => x['text'] (text), x['audio'] (numpy array)
 # to save the audio output
 # import soundfile as sf

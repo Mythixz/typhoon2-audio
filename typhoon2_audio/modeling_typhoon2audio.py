@@ -20,6 +20,7 @@ from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
 )
+import torch.distributed as dist
 from transformers.cache_utils import Cache, StaticCache
 from transformers.generation.utils import (
     GenerationConfig,
@@ -40,8 +41,16 @@ from transformers.generation.utils import (
     is_quanto_available,
     DynamicCache,
     EncoderDecoderCache,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
+    MinPLogitsWarper,
+    TypicalLogitsWarper, 
+    EpsilonLogitsWarper, 
+    EtaLogitsWarper, 
+    LogitNormalization,
 )
-
+from transformers.generation.streamers import BaseStreamer
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from .configuration_typhoon2audio import Typhoon2AudioConfig, BEATsConfig
 
@@ -733,7 +742,7 @@ class GenerationWithCTC(GenerationMixin):
                 dim=1,
             )
             ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
-            cur_units = ctc_postprocess(
+            cur_units = ctc_postprocess_tensor(
                 ctc_pred, blank=self.model.config.unit_vocab_size
             )
 
@@ -794,13 +803,13 @@ class GenerationWithCTC(GenerationMixin):
         else:
             return input_ids
 
-    def ctc_postprocess(self, tokens, blank):
-        _toks = tokens.squeeze(0).tolist()
-        deduplicated_toks = [
-            v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]
-        ]
-        hyp = torch.tensor([v for v in deduplicated_toks if v != blank])
-        return hyp
+def ctc_postprocess_tensor(tokens, blank):
+    _toks = tokens.squeeze(0).tolist()
+    deduplicated_toks = [
+        v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]
+    ]
+    hyp = torch.tensor([v for v in deduplicated_toks if v != blank])
+    return hyp
 
 
 class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
@@ -1092,11 +1101,11 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         conversation: List,
         max_new_tokens=1024,
         num_beams=1,
-        do_sample=True,
+        do_sample=False,
         top_p=0.9,
         repetition_penalty=1.0,
         length_penalty=1.0,
-        temperature=1.0,
+        temperature=0.7,
         streamer=None,
     ) -> str:
         embeds, atts = self.encode_speech_with_text(conversation)
@@ -1166,7 +1175,7 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         top_p=0.9,
         repetition_penalty=1.0,
         length_penalty=1.0,
-        temperature=1.0,
+        temperature=0.7,
         streamer=None,
     ):
         embed_tokens = (
@@ -1325,14 +1334,33 @@ class Typhoon2Audio2AudioForConditionalGeneration(
         output_hidden_states=True,
         return_dict_in_generate=True,
         streaming_unit_gen=False,
-        max_length=8000,
         # ----------------- #
+        # generation config
+        max_new_tokens=500,
+        max_length=None,
+        do_sample=False,
+        num_beams=1,
+        top_p=0.9,
+        repetition_penalty=1.0,
+        length_penalty=1.0,
+        temperature=0.7,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
 
         if "conversation" in kwargs and inputs_embeds is None:
             conversation = kwargs.get("conversation", [])
             inputs_embeds, attention_mask = self.encode_speech_with_text(conversation)
+
+        generation_config = GenerationConfig(
+            max_new_tokens=max_new_tokens,
+            max_length=max_length,
+            do_sample=do_sample,
+            num_beams=num_beams,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            length_penalty=length_penalty,
+            temperature=temperature,
+        )
 
         outputs = GenerationWithCTC.generate(
             self,
@@ -1342,9 +1370,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(
             output_hidden_states=output_hidden_states,
             return_dict_in_generate=return_dict_in_generate,
             streaming_unit_gen=streaming_unit_gen,
-            # typhoon2 (llama3.1) will set this to 20 somehow otherwise
-            max_length=max_length,
             # ------------------- #
+            generation_config=generation_config,
             bos_token_id=128000,
             eos_token_id=[128001, 128008, 128009],
         )
