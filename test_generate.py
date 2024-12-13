@@ -13,7 +13,7 @@ conversation = [
         "content": [
             {
                 "type": "audio",
-                "audio_url": "tmp/tmp-2860cd0a094b64043226167340af03a3.wav",
+                "audio_url": "examples/tmp-2860cd0a094b64043226167340af03a3.wav",
             },
             {"type": "text", "text": "Transcribe this audio"},
         ],
@@ -50,7 +50,7 @@ conversation2 = [
         "content": [
             {
                 "type": "audio",
-                "audio_url": "tmp/tmp-2860cd0a094b64043226167340af03a3.wav",
+                "audio_url": "examples/tmp-2860cd0a094b64043226167340af03a3.wav",
             },
             {
                 "type": "text",
@@ -61,9 +61,53 @@ conversation2 = [
 ]
 
 x = model.generate(conversation=conversation2)
-sf.write("tmp/speechout.wav", x["audio"]["array"], x["audio"]["sampling_rate"])
+sf.write("examples/speechout.wav", x["audio"]["array"], x["audio"]["sampling_rate"])
 print(x)
-import ipdb
+print("passed: test single-turn")
 
-ipdb.set_trace()
+
+conversation2_multi_turn = [
+    {"role": "system", "content": "You are a helpful female assistant named ไต้ฝุ่น. Respond conversationally to the speech provided in the language it is spoken in."},
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "audio",
+                "audio_url": "examples/tmp-2860cd0a094b64043226167340af03a3.wav",
+            },
+            {
+                "type": "text",
+                "text": "",
+            },
+        ],  
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "โอเคค่ะ, ฉันจะบอกชื่อเมืองใหญ่ๆ ในอเมริกาให้คุณฟัง:\n\n1. นิวยอร์ก\n2. ลอสแอนเจลิส\n3. ชิคาโก\n4. ฮิวสตัน\n5. ฟิลาเดลเฟีย\n6. บอสตัน\n7. ซานฟรานซิสโก\n8. วอชิงตัน ดี.ซี. (Washington D.C.)\n9. แอตแลนต้า\n10. ซีแอตเทิล\n\nถ้าคุณต้องการข้อมูลเพิ่มเติมหรือมีคำถามอื่นๆ กรุณาถามได้เลยค่ะ'",
+            },
+        ],  
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "audio",
+                "audio_url": "examples/tmp-2284cd76e1c875525ff75327a2fc3610.wav",
+            },
+            {
+                "type": "text",
+                "text": "",
+            },
+        ],  
+    },
+]
+x = model.generate(conversation=conversation2_multi_turn)
+
+print(x)
+print("passed: test multi-turn")
+
+import ipdb; ipdb.set_trace()
 print("finish testing generate")
