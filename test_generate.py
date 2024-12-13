@@ -21,7 +21,7 @@ conversation = [
 ]
 
 model0 = Typhoon2AudioForConditionalGeneration.from_pretrained(
-    "save_weights/llama3.1-typhoon2-audio-8b-instruct-241210/",
+    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
     torch_dtype=torch.float16,  # otherwise default to float32
 )
 
@@ -32,11 +32,6 @@ print("model0.device =", model0.device)
 response0 = model0.generate(conversation)
 
 print(response0)
-
-# model = Typhoon2Audio2AudioForConditionalGeneration.from_pretrained(
-#     "save_weights/llama3.1-typhoon2-audio-8b-instruct-241210/",
-#     torch_dtype=torch.float16, # otherwise default to float32
-# )
 
 model = AutoModel.from_pretrained(
     "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
