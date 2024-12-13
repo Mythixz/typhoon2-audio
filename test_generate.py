@@ -33,7 +33,7 @@ response0 = model0.generate(conversation)
 
 print(response0)
 
-model = AutoModel.from_pretrained(
+model = Typhoon2Audio2AudioForConditionalGeneration.from_pretrained(
     "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
     torch_dtype=torch.float16,
     trust_remote_code=True,
