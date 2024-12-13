@@ -1329,7 +1329,7 @@ class Typhoon2Audio2AudioForConditionalGeneration(
     ) -> Union[GenerateOutput, torch.LongTensor]:
 
         if "conversation" in kwargs and inputs_embeds is None:
-            conversation = kwargs["conversation"]
+            conversation = kwargs.get("conversation", [])
             inputs_embeds, attention_mask = self.encode_speech_with_text(conversation)
 
         outputs = GenerationWithCTC.generate(

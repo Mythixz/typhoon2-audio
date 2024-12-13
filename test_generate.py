@@ -60,7 +60,7 @@ conversation2 = [
     },
 ]
 
-x = model.generate(conversation2)
+x = model.generate(conversation=conversation2)
 sf.write("tmp/speechout.wav", x["audio"]["array"], x["audio"]["sampling_rate"])
 print(x)
 import ipdb
