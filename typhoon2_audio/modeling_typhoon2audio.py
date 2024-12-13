@@ -1007,7 +1007,7 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         conversation_list = self._split_conversation_by_speech(conversation_str)
 
         speech_embeds = [
-            {"audio_url": audio, "audio": self.encode_speech_only(sf.read(audio))}
+            {"audio_url": audio, "audio": self.encode_speech_only(sf.read(audio)[0])}
             for audio in self._filter_only_audio_content(converted_conversation)
         ]
 
