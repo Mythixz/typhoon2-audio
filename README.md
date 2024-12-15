@@ -1,10 +1,10 @@
 # Typhoon2-Audio
-The repository of Typhoon2-Audio, speech/audio-language model that supports speech-in and speech-out. It is built upon the Typhoon2 LLM, and it is optimized for Thai and English languages.
 
 <p align="center">
     <img src="assets/typhoon2_audio.png" width="25%"> <br>
 </p>
 
+The repository of Typhoon2-Audio, speech/audio-language model that supports speech-in and speech-out. It is built upon the Typhoon2 LLM, and it is optimized for Thai and English languages.
 
 ## Usage
 
