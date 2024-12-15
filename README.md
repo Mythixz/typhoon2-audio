@@ -1,5 +1,10 @@
 # Typhoon2-Audio
-The repository of Typhoon2-Audio, Thai audio-language model that supports speech-in and speech-out
+The repository of Typhoon2-Audio, speech/audio-language model that supports speech-in and speech-out. It is built upon the Typhoon2 LLM, and it is optimized for Thai and English languages.
+
+<p align="center">
+    <img src="assets/typhoon2_audio.png" width="25%"> <br>
+</p>
+
 
 ## Usage
 
@@ -133,4 +138,21 @@ python local_build.py
 python test_load_model.py
 python test_generate.py
 python test_tts.py
+```
+
+## Acknowledgements
+
+We are grateful to the previous open-source projects that provide useful resources for the development of Typhoon2-Audio, with notable projects including:
+- SALMONN: https://github.com/bytedance/SALMONN
+- Llama-Omni: https://github.com/ictnlp/LLaMA-Omni
+
+## Citation
+The first Typhoon-Audio work, focusing on improved understanding and instruction following as well as Thai performance):
+```
+@article{manakul2024enhancing,
+  title={Enhancing low-resource language and instruction following capabilities of audio language models},
+  author={Manakul, Potsawee and Sun, Guangzhi and Sirichotedumrong, Warit and Tharnpipitchai, Kasima and Pipatanakul, Kunat},
+  journal={arXiv preprint arXiv:2409.10999},
+  year={2024}
+}
 ```
