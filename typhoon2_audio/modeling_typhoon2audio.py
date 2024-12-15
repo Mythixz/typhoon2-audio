@@ -45,9 +45,9 @@ from transformers.generation.utils import (
     TopKLogitsWarper,
     TopPLogitsWarper,
     MinPLogitsWarper,
-    TypicalLogitsWarper, 
-    EpsilonLogitsWarper, 
-    EtaLogitsWarper, 
+    TypicalLogitsWarper,
+    EpsilonLogitsWarper,
+    EtaLogitsWarper,
     LogitNormalization,
 )
 from transformers.generation.streamers import BaseStreamer
@@ -97,6 +97,33 @@ from fairseq.models.text_to_speech.codehifigan import CodeGenerator as CodeHiFiG
 
 # ---------------------------------------------------------- #
 import soundfile as sf
+
+DEFAULT_MODEL_SAMPLING_RATE = 16000
+
+
+class TensorStreamer(BaseStreamer):
+
+    def __init__(self, **decode_kwargs):
+        self.decode_kwargs = decode_kwargs
+        self.token_cache = []
+
+    def put(self, value):
+        """
+        Receives tokens, decodes them, and prints them to stdout as soon as they form entire words.
+        """
+        if len(value.shape) > 1 and value.shape[0] > 1:
+            raise ValueError("TextStreamer only supports batch size 1")
+        elif len(value.shape) > 1:
+            value = value[0]
+
+        # Add the new token to the cache and decodes the entire thing.
+        self.token_cache.extend(value.tolist())
+
+    def end(self):
+        """Flushes any remaining cache and prints a newline to stdout."""
+        # Flush the cache, if it exists
+        if len(self.token_cache) > 0:
+            self.token_cache = []
 
 
 class GenerationWithCTC(GenerationMixin):
@@ -803,11 +830,10 @@ class GenerationWithCTC(GenerationMixin):
         else:
             return input_ids
 
+
 def ctc_postprocess_tensor(tokens, blank):
     _toks = tokens.squeeze(0).tolist()
-    deduplicated_toks = [
-        v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]
-    ]
+    deduplicated_toks = [v for i, v in enumerate(_toks) if i == 0 or v != _toks[i - 1]]
     hyp = torch.tensor([v for v in deduplicated_toks if v != blank])
     return hyp
 
@@ -1333,6 +1359,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(
         attention_mask=None,
         output_hidden_states=True,
         return_dict_in_generate=True,
+        streamer: Optional["BaseStreamer"] = None,
+        streamer_unit: Optional["BaseStreamer"] = None,
         streaming_unit_gen=False,
         # ----------------- #
         # generation config
@@ -1362,6 +1390,11 @@ class Typhoon2Audio2AudioForConditionalGeneration(
             temperature=temperature,
         )
 
+        if streaming_unit_gen and streamer_unit is None:
+            raise ValueError(
+                "streaming_unit_gen is True, but streamer_unit is not provided."
+            )
+
         outputs = GenerationWithCTC.generate(
             self,
             # position_ids=position_ids,
@@ -1369,6 +1402,8 @@ class Typhoon2Audio2AudioForConditionalGeneration(
             inputs_embeds=inputs_embeds,
             output_hidden_states=output_hidden_states,
             return_dict_in_generate=return_dict_in_generate,
+            streamer=streamer,
+            streamer_unit=streamer_unit,
             streaming_unit_gen=streaming_unit_gen,
             # ------------------- #
             generation_config=generation_config,
@@ -1376,26 +1411,45 @@ class Typhoon2Audio2AudioForConditionalGeneration(
             eos_token_id=[128001, 128008, 128009],
         )
 
-        hidden_states = outputs["hidden_states"]
-        hidden_states = torch.cat(
-            [hidden_states[0][-1][:, -1:, :]]
-            + [hidden_states[i][-1] for i in range(1, len(hidden_states))],
-            dim=1,
-        )
-        ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
+        if streaming_unit_gen and streamer_unit is not None:
+            for new_text in streamer:
+                generated_text += new_text
+                if new_text.strip() == "":
+                    continue
+                # TODO if it's more than some ratio; convert unit to sound, and create new unit and reset streamer_token_cache
+                unit = torch.tensor(
+                    [int(o) for o in streamer_unit.token_cache],
+                    device=self.device,
+                    dtype=torch.long,
+                ).view(
+                    1, -1
+                )  # [1, unit]
+                if unit.shape[-1] > 5:
+                    streamer_unit.token_cache = []
+                    wav_np = self.vocoder({"code": unit}, True).to(torch.float32)
+                    yield wav_np, generated_text
+                    generated_text = ""
+        else:
+            hidden_states = outputs["hidden_states"]
+            hidden_states = torch.cat(
+                [hidden_states[0][-1][:, -1:, :]]
+                + [hidden_states[i][-1] for i in range(1, len(hidden_states))],
+                dim=1,
+            )
+            ctc_pred = self.speech_generator.predict(hidden_states.squeeze(0))
 
-        # processing
-        output_ids, output_units = outputs.sequences, ctc_pred
+            # processing
+            output_ids, output_units = outputs.sequences, ctc_pred
 
-        # text
-        output_text = self.llama_tokenizer.batch_decode(
-            output_ids, add_special_tokens=False, skip_special_tokens=True
-        )[0]
+            # text
+            output_text = self.llama_tokenizer.batch_decode(
+                output_ids, add_special_tokens=False, skip_special_tokens=True
+            )[0]
 
-        # wav
-        output_audio = self.ctc_pred_to_audio(output_units)
+            # wav
+            output_audio = self.ctc_pred_to_audio(output_units)
 
-        return {"text": output_text, "unit": output_units, "audio": output_audio}
+            return {"text": output_text, "unit": output_units, "audio": output_audio}
 
     @torch.no_grad()
     def synthesize_speech(
