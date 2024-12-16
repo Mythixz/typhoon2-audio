@@ -73,6 +73,9 @@ def inference(conversations, temperature=0.4, system_prompt=None):
                 }
             )
 
+    if updated_conversations[-1]["role"] == "assistant":
+        updated_conversations = updated_conversations[:-1]
+
     streamer = TextIteratorStreamer(
         model.llama_tokenizer,
         skip_prompt=True,
@@ -81,7 +84,7 @@ def inference(conversations, temperature=0.4, system_prompt=None):
     )
     streamer_unit = TensorStreamer(timeout=15)
     generator = model.generate_stream(
-        conversation=conversations,
+        conversation=updated_conversations,
         temperature=temperature,
         top_p=0.95,
         max_new_tokens=512,
