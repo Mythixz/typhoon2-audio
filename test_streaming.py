@@ -76,7 +76,7 @@ streamer_unit = TensorStreamer()
 
 generated_text = ""
 generated_wav = None
-for wav, txt in s2s_model.generate(
+for wav, txt in s2s_model.generate_stream(
     conversation=conversation2,
     streamer=streamer,
     streamer_unit=streamer_unit,
