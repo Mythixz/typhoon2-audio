@@ -135,3 +135,12 @@ python test_generate.py
 python test_streaming.py
 python test_tts.py
 ```
+
+## To run a demo
+Make sure you have `.env` ready and filled. Then run:
+
+```
+conda activate py310-cosyvoice
+python demo.py
+```
+Note: GPU is required to run a demo
