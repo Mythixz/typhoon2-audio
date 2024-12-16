@@ -6,6 +6,8 @@ from transformers import AutoModel
 import soundfile as sf
 import torch
 
+model_name = "scb10x/llama3.1-typhoon2-audio-8b-instruct-241213"
+
 conversation = [
     {"role": "system", "content": "You are a helpful female assistant named ไต้ฝุ่น."},
     {
@@ -21,7 +23,7 @@ conversation = [
 ]
 
 model0 = Typhoon2AudioForConditionalGeneration.from_pretrained(
-    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
+    model_name,
     torch_dtype=torch.float16,  # otherwise default to float32
 )
 
@@ -34,7 +36,7 @@ response0 = model0.generate(conversation)
 print(response0)
 
 model = Typhoon2Audio2AudioForConditionalGeneration.from_pretrained(
-    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241210",
+    model_name,
     torch_dtype=torch.float16,
     trust_remote_code=True,
 )
