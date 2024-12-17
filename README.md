@@ -117,7 +117,7 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 - [x] Implement `.forward()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Implement `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Allow streaming for `.generate()` for `Typhoon2AudioForConditionalGeneration`
-- [ ] Allow streaming for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
+- [x] Allow streaming for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Allow multi-turn for `.generate()` for `Typhoon2AudioForConditionalGeneration`
 - [x] Allow multi-turn for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Add TTS functionality to `Typhoon2Audio2AudioForConditionalGeneration`
@@ -137,8 +137,18 @@ python local_build.py
 ```
 python test_load_model.py
 python test_generate.py
+python test_streaming.py
 python test_tts.py
 ```
+
+## To run a demo
+Make sure you have `.env` ready and filled. Then run:
+
+```
+conda activate py310-cosyvoice
+python demo.py
+```
+Note: GPU is required to run a demo
 
 ## Acknowledgements
 
