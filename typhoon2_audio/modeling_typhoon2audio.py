@@ -1429,6 +1429,9 @@ class Typhoon2Audio2AudioForConditionalGeneration(
         # wav
         output_audio = self.ctc_pred_to_audio(output_units)
 
+        # output unit as a list
+        output_units = output_units.tolist()[0]
+
         return {"text": output_text, "unit": output_units, "audio": output_audio}
 
     @torch.no_grad()
@@ -1520,7 +1523,6 @@ class Typhoon2Audio2AudioForConditionalGeneration(
         text_ = self.llama_tokenizer.apply_chat_template(
             [{"role": "assistant", "content": text}], tokenize=False
         )
-
         inputs = self.llama_tokenizer(text_, return_tensors="pt").to(self.device)
         outputs = self(**inputs)
         hidden_states = outputs["hidden_states"][-1]
@@ -1532,10 +1534,14 @@ class Typhoon2Audio2AudioForConditionalGeneration(
         # vocoder
         if hasattr(self, "vocoder"):
             units = self.ctc_postprocess(units, blank=self.config.unit_vocab_size)
-            units = [(list(map(int, units.strip().split())))]
-            units_tensor = torch.tensor(units, dtype=torch.int64, device=self.device)
-            audio_arr = self.vocoder({"code": units_tensor}, True)
-            audio_arr = audio_arr.detach().cpu().numpy()
+            if units != "":
+                # otherwise vocoder will throw an error                
+                units = [(list(map(int, units.strip().split())))]
+                units_tensor = torch.tensor(units, dtype=torch.int64, device=self.device)
+                audio_arr = self.vocoder({"code": units_tensor}, True)
+                audio_arr = audio_arr.detach().cpu().numpy()
+            else:
+                audio_arr = None
         else:
             audio_arr = None
 
