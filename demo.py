@@ -23,7 +23,7 @@ if os.path.exists(OUT_PATH):
     os.makedirs(OUT_PATH)
 
 model = Typhoon2Audio2AudioForConditionalGeneration.from_pretrained(
-    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241213",
+    "scb10x/llama3.1-typhoon2-audio-8b-instruct",
     torch_dtype=torch.float16,
     trust_remote_code=True,
 )
@@ -50,7 +50,7 @@ theme = gr.themes.Soft(
 )
 
 
-DEFAULT_SYSTEM_PROMPT = "You are a helpful female assistant named ไต้ฝุ่น."
+DEFAULT_SYSTEM_PROMPT = "You are a helpful female assistant named ไต้ฝุ่น. Respond conversationally to the speech provided in the language it is spoken in."
 messages = []
 
 
