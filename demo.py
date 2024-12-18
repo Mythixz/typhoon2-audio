@@ -13,14 +13,12 @@ import xxhash
 import soundfile as sf
 from dotenv import load_dotenv
 from datasets import Audio
+from pathlib import Path
 
 load_dotenv()
 
-OUT_PATH = "out"
-
-if os.path.exists(OUT_PATH):
-    shutil.rmtree(OUT_PATH)
-    os.makedirs(OUT_PATH)
+OUT_PATH = Path("tmp/out")
+OUT_PATH.mkdir(exist_ok=True, parents=True)
 
 model = Typhoon2Audio2AudioForConditionalGeneration.from_pretrained(
     "scb10x/llama3.1-typhoon2-audio-8b-instruct",
@@ -69,7 +67,7 @@ def run_inference(audio_input, system_prompt, chat_box):
         resampler.encode_example({"array": y, "sampling_rate": sr})
     )
     array_hash = str(xxhash.xxh32(a["array"].tostring()).hexdigest())
-    wav_path = f"./tmp/{array_hash}.wav"
+    wav_path = OUT_PATH / f"{array_hash}.wav"
     os.makedirs("tmp", exist_ok=True)
     if not os.path.exists(wav_path):
         sf.write(wav_path, a["array"], a["sampling_rate"], format="wav")
@@ -85,7 +83,7 @@ def run_inference(audio_input, system_prompt, chat_box):
 
     text = response["text"]
     audio = response["audio"]
-    temp_out_path = f"./tmp/out-{array_hash}.wav"
+    temp_out_path = OUT_PATH / f"out-{array_hash}.wav"
     audio_arr = audio["array"].astype(np.float32)
     sf.write(temp_out_path, audio_arr, audio["sampling_rate"], format="wav")
 
@@ -233,7 +231,7 @@ def run_inference(audio_input, text_prompt):
         resampler.encode_example({"array": y, "sampling_rate": sr})
     )
     array_hash = str(xxhash.xxh32(a["array"].tostring()).hexdigest())
-    wav_path = f"out/{array_hash}.wav"
+    wav_path = OUT_PATH / f"{array_hash}.wav"
 
     if not os.path.exists(wav_path):
         sf.write(wav_path, a["array"], a["sampling_rate"], format="wav")
@@ -324,7 +322,7 @@ with gr.Blocks(theme=theme) as processing_demo:
 
 
 def generate_speech(text: str):
-    file_name = f"out/{xxhash.xxh32(text).hexdigest()}.wav"
+    file_name = OUT_PATH / f"{xxhash.xxh32(text).hexdigest()}.wav"
     output = model.synthesize_speech(text)
     audio = output["array"].astype(np.float32)
     sf.write(
