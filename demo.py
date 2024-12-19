@@ -400,4 +400,4 @@ This project utilizes certain datasets and checkpoints that are subject to their
     )
 
 demo.queue()
-demo.launch(ssr_mode=False, share=True)
+demo.launch(ssr_mode=False)
