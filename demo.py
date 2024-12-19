@@ -75,11 +75,9 @@ def run_inference(audio_input, system_prompt, chat_box):
         {"role": "user", "content": [{"type": "audio", "audio_url": wav_path}]}
     )
 
-    updated_history = (
-        [{"role": "system", "content": system_prompt}] + messages
-        if system_prompt and system_prompt.strip() != ""
-        else messages
-    )
+    updated_history = messages
+    if system_prompt and system_prompt.strip() != "":
+        updated_history[0]["content"].insert(0, {"type": "text", "text": system_prompt})
 
     # Typhoon-Audio model
     response = model.generate(conversation=updated_history)
@@ -145,8 +143,8 @@ with gr.Blocks(theme=theme) as omni_demo:
             with gr.Row():
                 system_prompt = gr.Textbox(
                     value=DEFAULT_SYSTEM_PROMPT,
-                    label="System Prompt",
-                    placeholder="You can control the model's behavior by specifying the system prompt here.",
+                    label="Text Prompt",
+                    placeholder="You can control the model's behavior by specifying the prompt here.",
                 )
             with gr.Row():
                 cur_dir = os.path.dirname(os.path.abspath(__file__))
@@ -212,7 +210,7 @@ def gradio_reset_all():
     )
 
 
-def run_inference(audio_input, text_prompt, sys_prompt):
+def run_inference(audio_input, text_prompt):
     yield (
         gr.Button(
             value="Waiting in queue for GPU time...",
@@ -250,13 +248,6 @@ def run_inference(audio_input, text_prompt, sys_prompt):
         }
     ]
 
-    if sys_prompt and sys_prompt.strip() != "":
-        conversation = [
-            {
-                "role": "system",
-                "content": sys_prompt,
-            }
-        ] + conversation
     typhoon_output = model.generate(conversation=conversation)
     yield (
         gr.Button(value="Click to run inference", interactive=True, variant="primary"),
@@ -291,13 +282,8 @@ with gr.Blocks(theme=theme) as processing_demo:
 
         with gr.Column(scale=8):
             with gr.Column():
-                sys_prompt = gr.Textbox(
-                    value=DEFAULT_SYSTEM_PROMPT,
-                    label="System Prompt",
-                    placeholder="You can control the model's behavior by specifying the system prompt here.",
-                )
                 text_input = gr.Textbox(
-                    value="",
+                    value=DEFAULT_SYSTEM_PROMPT,
                     label="Text Prompt",
                     placeholder="Optional (blank = speech instruction following), แปลงเสียงเป็นข้อความ, อธิบายเสียง, etc",
                 )
@@ -316,7 +302,7 @@ with gr.Blocks(theme=theme) as processing_demo:
 
             submit_button.click(
                 fn=run_inference,
-                inputs=[audio_input, text_input, sys_prompt],
+                inputs=[audio_input, text_input],
                 outputs=[submit_button, output_ta, clear_button],
             )
 
