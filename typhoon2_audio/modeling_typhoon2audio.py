@@ -1511,7 +1511,6 @@ class Typhoon2Audio2AudioForConditionalGeneration(
                 wav_np = self.vocoder({"code": unit}, True).to(torch.float32)
                 yield wav_np, generated_text
                 generated_text = ""
-            yield None, generated_text
 
     @torch.no_grad()
     def synthesize_speech(
@@ -1536,11 +1535,9 @@ class Typhoon2Audio2AudioForConditionalGeneration(
         if hasattr(self, "vocoder"):
             units = self.ctc_postprocess(units, blank=self.config.unit_vocab_size)
             if units != "":
-                # otherwise vocoder will throw an error
+                # otherwise vocoder will throw an error                
                 units = [(list(map(int, units.strip().split())))]
-                units_tensor = torch.tensor(
-                    units, dtype=torch.int64, device=self.device
-                )
+                units_tensor = torch.tensor(units, dtype=torch.int64, device=self.device)
                 audio_arr = self.vocoder({"code": units_tensor}, True)
                 audio_arr = audio_arr.detach().cpu().numpy()
             else:
