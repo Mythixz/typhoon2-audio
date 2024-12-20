@@ -8,12 +8,18 @@ The repository of Typhoon2-Audio, speech/audio-language model that supports spee
 
 ## Usage
 
+### Requirements
+
+- torch >= 2.3.0
+- transformers >= 4.45.0 
+- fairseq >= 0.12.2
+
 ### Load Model
 ```python
 import torch
 from transformers import AutoModel
 model = AutoModel.from_pretrained(
-    "scb10x/llama3.1-typhoon2-audio-8b-instruct-241213",
+    "scb10x/llama3.1-typhoon2-audio-8b-instruct",
     torch_dtype=torch.float16, 
     trust_remote_code=True
 )
@@ -106,7 +112,18 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 # y => numpy array
 ```
 
+## To run a demo
+
+- Demo: https://audio.opentyphoon.ai/
+- Currently, streaming speech output feature is still under development, any PR is welcome!
+
+```
+python demo.py
+```
+Note: GPU is required to run a demo
+
 ## To Do
+
 - [x] Merge LoRA weights
 - [x] Integrate Encoder + LLM + Generator + Vocoder
 - [x] Local build to upload to HF
@@ -117,7 +134,7 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 - [x] Implement `.forward()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Implement `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Allow streaming for `.generate()` for `Typhoon2AudioForConditionalGeneration`
-- [x] Allow streaming for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
+- [ ] Allow streaming for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Allow multi-turn for `.generate()` for `Typhoon2AudioForConditionalGeneration`
 - [x] Allow multi-turn for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Add TTS functionality to `Typhoon2Audio2AudioForConditionalGeneration`
@@ -128,27 +145,12 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 - [ ] Make the code self-contained (LLM) -- tried but initialization is very slow
 - [x] Make the code self-contained (Vocoder) -- done but requires import fairseq
 
-## Build a model (only works locally)
+## Build a model locally
+Look at this script:
+
 ```
 python local_build.py
 ```
-
-## To test locally
-```
-python test_load_model.py
-python test_generate.py
-python test_streaming.py
-python test_tts.py
-```
-
-## To run a demo
-Make sure you have `.env` ready and filled. Then run:
-
-```
-conda activate py310-cosyvoice
-python demo.py
-```
-Note: GPU is required to run a demo
 
 ## Acknowledgements
 
@@ -157,7 +159,20 @@ We are grateful to the previous open-source projects that provide useful resourc
 - Llama-Omni: https://github.com/ictnlp/LLaMA-Omni
 
 ## Citation
-The first Typhoon-Audio work, focusing on improved understanding and instruction following as well as Thai performance):
+Typhoon 2 Technical Report:
+```
+@misc{typhoon2,
+      title={Typhoon 2: A Family of Open Text and Multimodal Thai Large Language Models}, 
+      author={Kunat Pipatanakul and Potsawee Manakul and Natapong Nitarach and Warit Sirichotedumrong and Surapon Nonesung and Teetouch Jaknamon and Parinthapat Pengpun and Pittawat Taveekitworachai and Adisai Na-Thalang and Sittipong Sripaisarnmongkol and Krisanapong Jirayoot and Kasima Tharnpipitchai},
+      year={2024},
+      eprint={2412.13702},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2412.13702}, 
+}
+```
+
+The first Typhoon-Audio work, focusing on improved understanding and instruction following as well as Thai performance:
 ```
 @article{manakul2024enhancing,
   title={Enhancing low-resource language and instruction following capabilities of audio language models},
