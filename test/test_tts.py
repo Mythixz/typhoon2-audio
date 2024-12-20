@@ -1,3 +1,8 @@
+import sys
+import os
+# Add the root directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from typhoon2_audio.modeling_typhoon2audio import Typhoon2AudioForConditionalGeneration, Typhoon2Audio2AudioForConditionalGeneration
 from typhoon2_audio.configuration_typhoon2audio import Typhoon2AudioConfig
 from transformers import AutoModel
@@ -7,7 +12,7 @@ import torch
 
 # print(response0)
 model = Typhoon2Audio2AudioForConditionalGeneration.from_pretrained(
-    "save_weights/llama3.1-typhoon2-audio-8b-instruct-241210/",
+    "save_weights/llama3.1-typhoon2-audio-8b-instruct/",
     torch_dtype=torch.float16, # otherwise default to float32
 )
 

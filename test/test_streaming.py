@@ -1,3 +1,8 @@
+import sys
+import os
+# Add the root directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from typhoon2_audio.modeling_typhoon2audio import (
     DEFAULT_MODEL_SAMPLING_RATE,
     TensorStreamer,
@@ -23,7 +28,7 @@ conversation = [
     },
 ]
 
-model_name = "scb10x/llama3.1-typhoon2-audio-8b-instruct-241213"
+model_name = "scb10x/llama3.1-typhoon2-audio-8b-instruct"
 s2t_model = Typhoon2AudioForConditionalGeneration.from_pretrained(
     model_name,
     torch_dtype=torch.float16,
