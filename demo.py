@@ -117,6 +117,7 @@ def is_able_to_start(audio_input):
 
 
 def gradio_reset_all():
+    global messages
     messages = []
 
     return (
