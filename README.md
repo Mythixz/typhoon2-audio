@@ -10,9 +10,9 @@ The repository of Typhoon2-Audio, speech/audio-language model that supports spee
 
 ### Requirements
 
-- torch >= 2.3.0
-- transformers >= 4.45.0 
-- fairseq >= 0.12.2
+- torch==2.3.0
+- transformers==4.45.0 
+- fairseq==0.12.2
 
 ### Load Model
 ```python
