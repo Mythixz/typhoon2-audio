@@ -148,10 +148,6 @@ class Typhoon2AudioConfig(PretrainedConfig):
         self.vocab_size = 128256
 
         # Unit Vocoder (HiFiGAN)
-        self.vocoder_path = {
-            "repo_id": "scb10x/unit-vocoder-gcp-th-v1-00206600",
-            "filename": "checkpoint.pt",
-        }
         self.vocoder_config = {
             "resblock": 1,
             "upsample_rates": [5, 4, 4, 2, 2],
