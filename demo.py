@@ -71,16 +71,23 @@ def run_inference(audio_input, system_prompt, chat_box):
     if not os.path.exists(wav_path):
         sf.write(wav_path, a["array"], a["sampling_rate"], format="wav")
 
-    messages.append(
-        {"role": "user", "content": [{"type": "audio", "audio_url": wav_path}]}
-    )
-
-    updated_history = messages
-    if system_prompt and system_prompt.strip() != "":
-        updated_history[0]["content"].insert(0, {"type": "text", "text": system_prompt})
+    # adding system prompt seems to be more effective than as system prompt
+    # this is a quick hack, but more investigate should be conducted
+    if len(messages) == 0:
+            messages.append({
+                "role": "user", 
+                "content": [
+                    {"type": "text", "text": system_prompt},
+                    {"type": "audio", "audio_url": wav_path},
+                ]
+            })
+    else:
+        messages.append(
+            {"role": "user", "content": [{"type": "audio", "audio_url": wav_path}]}
+        )
 
     # Typhoon-Audio model
-    response = model.generate(conversation=updated_history)
+    response = model.generate(conversation=messages)
 
     text = response["text"]
     audio = response["audio"]
@@ -188,6 +195,9 @@ with gr.Blocks(theme=theme) as omni_demo:
 
 
 # --- Processing Demo ---
+
+DEFAULT_SYSTEM_PROMPT_PROCESSING = "Listen to the audio and answer the question"
+
 def is_able_to_start(audio_input):
     if audio_input is not None:
         return gr.Button(
@@ -197,7 +207,7 @@ def is_able_to_start(audio_input):
 
 
 def gradio_reset_all():
-    sys_prompt = DEFAULT_SYSTEM_PROMPT
+    sys_prompt = DEFAULT_SYSTEM_PROMPT_PROCESSING
     return (
         gr.update(value=None),
         gr.update(
@@ -284,7 +294,7 @@ with gr.Blocks(theme=theme) as processing_demo:
         with gr.Column(scale=8):
             with gr.Column():
                 text_input = gr.Textbox(
-                    value=DEFAULT_SYSTEM_PROMPT,
+                    value=DEFAULT_SYSTEM_PROMPT_PROCESSING,
                     label="Text Prompt",
                     placeholder="Optional (blank = speech instruction following), แปลงเสียงเป็นข้อความ, อธิบายเสียง, etc",
                 )
@@ -358,7 +368,7 @@ with gr.Blocks(theme=theme) as tts_demo:
             ),
         ],
         outputs=gr.Audio(label=""),
-        flagging_mode="never",
+        flagging_mode="never", # some version of gradio will result in an error -- comment this out
     )
 
 with gr.Blocks(
@@ -388,3 +398,4 @@ This project utilizes certain datasets and checkpoints that are subject to their
 
 demo.queue()
 demo.launch(ssr_mode=False)
+# demo.launch(share=True)
