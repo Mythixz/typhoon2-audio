@@ -1513,6 +1513,7 @@ class Typhoon2Audio2AudioForConditionalGeneration(
                 wav_np = self.vocoder({"code": unit}, True).to(torch.float32)
                 yield wav_np, generated_text
                 generated_text = ""
+        yield None, generated_text
 
     @torch.no_grad()
     def synthesize_speech(

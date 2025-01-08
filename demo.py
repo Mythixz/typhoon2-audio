@@ -1,8 +1,12 @@
+from dataclasses import dataclass, field
+from typing import Tuple
 from typhoon2_audio.modeling_typhoon2audio import (
     DEFAULT_MODEL_SAMPLING_RATE,
     Typhoon2Audio2AudioForConditionalGeneration,
+    TensorStreamer,
 )
-
+import copy
+from transformers import TextIteratorStreamer
 import os
 import gradio as gr
 from gradio import ChatMessage
@@ -13,6 +17,13 @@ import soundfile as sf
 from dotenv import load_dotenv
 from datasets import Audio
 from pathlib import Path
+from gradio_webrtc import (
+    AlgoOptions,
+    ReplyOnPause,
+    WebRTC,
+    AdditionalOutputs,
+    get_twilio_turn_credentials,
+)
 
 load_dotenv()
 
@@ -74,13 +85,15 @@ def run_inference(audio_input, system_prompt, chat_box):
     # adding system prompt seems to be more effective than as system prompt
     # this is a quick hack, but more investigate should be conducted
     if len(messages) == 0:
-            messages.append({
-                "role": "user", 
+        messages.append(
+            {
+                "role": "user",
                 "content": [
                     {"type": "text", "text": system_prompt},
                     {"type": "audio", "audio_url": wav_path},
-                ]
-            })
+                ],
+            }
+        )
     else:
         messages.append(
             {"role": "user", "content": [{"type": "audio", "audio_url": wav_path}]}
@@ -197,6 +210,7 @@ with gr.Blocks(theme=theme) as omni_demo:
 # --- Processing Demo ---
 
 DEFAULT_SYSTEM_PROMPT_PROCESSING = "Listen to the audio and answer the question"
+
 
 def is_able_to_start(audio_input):
     if audio_input is not None:
@@ -368,8 +382,214 @@ with gr.Blocks(theme=theme) as tts_demo:
             ),
         ],
         outputs=gr.Audio(label=""),
-        flagging_mode="never", # some version of gradio will result in an error -- comment this out
+        flagging_mode="never",  # some version of gradio will result in an error -- comment this out
     )
+
+
+### WebRTC demo
+
+
+@torch.no_grad()
+def inference_rtc(conversations, temperature=0.4, system_prompt=None):
+    updated_conversations = []
+
+    if system_prompt and system_prompt.strip():
+        updated_conversations.append({"role": "system", "content": system_prompt})
+
+    for conv in conversations:
+        if isinstance(conv["content"], str):
+            updated_conversations.append(
+                {"role": conv["role"], "content": conv["content"]}
+            )
+        else:
+            if isinstance(conv["content"], dict):
+                audio_path = conv["content"]["path"]
+            else:
+                audio_path = conv["content"].file.path
+            updated_conversations.append(
+                {
+                    "role": conv["role"],
+                    "content": [{"type": "audio", "audio_url": audio_path}],
+                }
+            )
+
+    if updated_conversations[-1]["role"] == "assistant":
+        updated_conversations = updated_conversations[:-1]
+
+    streamer = TextIteratorStreamer(
+        model.llama_tokenizer,
+        skip_prompt=True,
+        skip_special_tokens=True,
+        timeout=15,
+    )
+    streamer_unit = TensorStreamer(timeout=15)
+    generator = model.generate_stream(
+        conversation=updated_conversations,
+        temperature=temperature,
+        top_p=0.95,
+        max_new_tokens=512,
+        streaming_unit_gen=True,
+        streamer=streamer,
+        streamer_unit=streamer_unit,
+    )
+    for wav_np, text in generator:
+        yield wav_np, text
+
+
+rtc_configuration = get_twilio_turn_credentials()
+
+
+@dataclass
+class RTCAppState:
+    conversation: list = field(default_factory=list)
+    system_prompt: str = "You are always answer in Thai."
+    stopped: bool = False
+
+
+LOADER_STR = "♫"
+IS_RUNNING_RTC = False
+AUDIO_CHUCK_DURATION = 0.6
+
+
+def response_rtc(
+    audio_tuple: Tuple[int, np.ndarray], state: RTCAppState, system_prompt: str
+):
+    global IS_RUNNING_RTC
+    if IS_RUNNING_RTC or not audio_tuple:
+        print("skip prediction; currently in responding")
+        return state
+
+    IS_RUNNING_RTC = True
+    if system_prompt != state.system_prompt:
+        state.system_prompt = system_prompt
+
+    sr, audio = audio_tuple
+    print("audio length ", audio.shape[-1] / DEFAULT_MODEL_SAMPLING_RATE)
+    if audio.shape[-1] / DEFAULT_MODEL_SAMPLING_RATE < AUDIO_CHUCK_DURATION * 3:
+        print("too short, maybe misfired")
+        return state
+
+    file_name = (
+        (OUT_PATH / f"rt_{xxhash.xxh32(bytes(audio)).hexdigest()}.wav")
+        .absolute()
+        .as_posix()
+    )
+    assert len(audio.shape) == 2
+    sf.write(file_name, audio[0], sr, format="wav")
+
+    state.conversation.append(
+        {"role": "user", "content": {"path": file_name, "mime_type": "audio/wav"}}
+    )
+
+    state.conversation.append(
+        {
+            "role": "assistant",
+            "content": LOADER_STR,
+        }
+    )
+
+    decode_sample_rate = DEFAULT_MODEL_SAMPLING_RATE
+    buff = None
+    for wav, text in inference_rtc(
+        copy.deepcopy(state.conversation), system_prompt=state.system_prompt
+    ):
+        assert state.conversation[-1]["role"] == "assistant"
+        if state.conversation[-1]["content"] == LOADER_STR:
+            state.conversation[-1]["content"] = text
+        else:
+            state.conversation[-1]["content"] = state.conversation[-1]["content"] + text
+
+        # wav might be none on last step
+        if wav is None:
+            continue
+
+        if buff is None:
+            buff = wav.cpu().numpy()
+        else:
+            buff = np.concatenate((buff, wav.cpu().numpy()))
+        if buff.shape[0] > (decode_sample_rate * 2):
+            yield (
+                decode_sample_rate,
+                buff.reshape(1, -1),
+                "mono",
+            ), AdditionalOutputs(dict(state=state, chatbot=state.conversation))
+            buff = None
+
+    IS_RUNNING_RTC = False
+    if buff is not None and buff.shape[0] > 0:
+        yield (decode_sample_rate, buff.reshape(1, -1), "mono"), AdditionalOutputs(
+            dict(
+                state=RTCAppState(
+                    conversation=state.conversation, system_prompt=state.system_prompt
+                ),
+                chatbot=state.conversation,
+            )
+        )
+
+
+with gr.Blocks(theme=theme) as rtc_demo:
+    gr.HTML(
+        """
+    <div style='text-align: center'>
+        <h1>
+            Talk To Typhoon 2 Audio (Powered by WebRTC ⚡️)
+        </h1>
+        <p>
+            Each conversation is limited to 60 seconds. Once the time limit is up you can rejoin the conversation.
+        </p>
+        <p>
+            Please use earphone, due to voice activity detection is fired on output speech on speaker.
+        </p>
+    </div>
+    """
+    )
+    with gr.Column():
+        with gr.Row():
+            system_prompt = gr.Textbox(
+                label="System Prompt",
+                value=DEFAULT_SYSTEM_PROMPT,
+                info="Customize the system prompt to guide the AI's behavior",
+            )
+        with gr.Group():
+            webrtc = WebRTC(
+                label="Stream",
+                rtc_configuration=rtc_configuration,
+                mode="send-receive",
+                modality="audio",
+            )
+        with gr.Row():
+            chatbot_component = gr.Chatbot(label="Conversation", type="messages")
+        state = gr.State(value=RTCAppState())
+        vad_options = AlgoOptions(
+            audio_chunk_duration=AUDIO_CHUCK_DURATION,
+            started_talking_threshold=0.2,
+            speech_threshold=0.1,
+        )
+        webrtc.stream(
+            fn=ReplyOnPause(
+                response_rtc,
+                output_sample_rate=DEFAULT_MODEL_SAMPLING_RATE,
+                input_sample_rate=DEFAULT_MODEL_SAMPLING_RATE,
+                output_frame_size=480,
+                algo_options=vad_options,
+            ),
+            inputs=[webrtc, state, system_prompt],
+            outputs=[webrtc],
+            time_limit=60,
+        )
+
+        def update_state(response):
+            state = response["state"]
+            chatbot = response["chatbot"]
+            return state, chatbot
+
+        webrtc.on_additional_outputs(
+            update_state,
+            inputs=[],
+            outputs=[state, chatbot_component],
+            queue=False,
+            show_progress="hidden",
+        )
 
 with gr.Blocks(
     theme=theme, title="🌪️ Typhoon2 Audio: Native Thai End-to-End Audio-Language Model"
@@ -381,8 +601,13 @@ with gr.Blocks(
 - The research preview model may not work well on long audio clips, particularly those exceeding 30 seconds. Text prompt can be empty for speech instruction following."""
     )
     gr.TabbedInterface(
-        [omni_demo, processing_demo, tts_demo],
-        ["Conversation Demo", "Audio Processing Demo", "Text-to-Speech Demo"],
+        [omni_demo, processing_demo, tts_demo, rtc_demo],
+        [
+            "Conversation Demo",
+            "Audio Processing Demo",
+            "Text-to-Speech Demo",
+            "Real-Time Conversation Demo (WebRTC)",
+        ],
         theme=theme,
     )
     gr.Markdown(
