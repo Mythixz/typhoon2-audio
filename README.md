@@ -154,7 +154,7 @@ Note: GPU is required to run a demo
 - [ ] Write doc & method string
 - [ ] Allow flash_attention for LLM
 - [ ] Allow `device_map="auto"`
-- [ ] Make the code self-contained (LLM) -- tried but initialization is very slow
+- [x] Make the code self-contained (LLM)
 - [x] Make the code self-contained (Vocoder) -- done but requires import fairseq
 
 ## Build a model locally
