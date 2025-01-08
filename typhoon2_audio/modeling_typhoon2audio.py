@@ -18,6 +18,7 @@ from transformers import (
     WhisperModel,
     PreTrainedModel,
     AutoTokenizer,
+    AutoConfig,
     AutoModelForCausalLM,
 )
 import torch.distributed as dist
@@ -72,6 +73,7 @@ from transformers.modeling_utils import (
     apply_chunking_to_forward,
     find_pruneable_heads_and_indices,
     prune_linear_layer,
+    no_init_weights
 )
 from transformers.models.bert.configuration_bert import BertConfig
 
@@ -876,9 +878,9 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
         self.second_stride = config.second_stride
 
         # 2. LLM (e.g., Llama3)
-        self.llama_model = AutoModelForCausalLM.from_pretrained(
-            config.llama_base_model, attn_implementation=attn_implementation
-        )
+        with no_init_weights(_enable=True):
+            llm_config = AutoConfig.from_pretrained(config.llama_base_model)
+            self.llama_model = AutoModelForCausalLM.from_config(llm_config, attn_implementation=attn_implementation)
         # tokenizer
         self.llama_tokenizer = AutoTokenizer.from_pretrained(
             config.llama_base_model, use_fast=False
