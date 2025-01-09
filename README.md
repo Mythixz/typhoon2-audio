@@ -1,4 +1,11 @@
-# Typhoon2-Audio
+Typhoon2-Audio
+=====================================================
+[![arxiv](https://img.shields.io/badge/arXiv-2412.13702-b31b1b.svg)](https://arxiv.org/abs/2412.13702)
+[![Models](https://img.shields.io/badge/🤗-Models-yellow.svg)](https://huggingface.co/scb10x/llama3.1-typhoon2-audio-8b-instruct)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+- Technical Report: [Typhoon 2: A Family of Open Text and Multimodal Thai Large Language Models](https://arxiv.org/abs/2412.13702) (Section 5)
+- Model Weights: https://huggingface.co/scb10x/llama3.1-typhoon2-audio-8b-instruct
 
 <p align="center">
     <img src="assets/typhoon2_audio.png" width="25%"> <br>
