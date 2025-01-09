@@ -22,7 +22,7 @@ The repository of Typhoon2-Audio, speech/audio-language model that supports spee
 pip install pip==24.0
 pip install transformers==4.45.2
 pip install fairseq==0.12.2 # fairseq required pip==24.0 to install & only worked only on python 3.10
-pip install flash-attn
+pip install flash-attn==2.5.9.post1
 ```
 
 
