@@ -153,9 +153,8 @@ with gr.Blocks(theme=theme) as omni_demo:
     gr.HTML(
         """
     <div style='text-align: center'>
-        <h1>
-            Converse With Typhoon2 Audio
-        </h1>
+        <h1>Converse With Typhoon2-Audio</h1></br>
+        Typhoon2-Audio is capable of performing multi-turn speech-in speech-out. It is optimized for Thai, but also supports English.
     </div>
     """
     )
@@ -289,9 +288,19 @@ with gr.Blocks(theme=theme) as processing_demo:
     gr.HTML(
         """
     <div style='text-align: center'>
-        <h1>
-            Audio Processing With Typhoon2 Audio
-        </h1>
+        <h1>Audio Processing With Typhoon2-Audio</h1><br>
+    </div>
+    <div style='text-align: left'>
+        This shows our enhancement of speech and audio understanding capabilties to the first version of Typhoon-Audio. The model can perform speech/audio various tasks with some prompts examples such as:<br>
+        <ul>
+            <li>Transcribe this audio</li>
+            <li>What's the gender of the speaker?</li>
+            <li>Describe the emotion of the speaker</li>
+            <li>Describe the background audio</li>
+            <li>Listen and answer the question</li>
+            <li>What does the speaker want?</li>
+            <li>What animal might have made this sound?</li>
+        </ul> 
     </div>
     """
     )
@@ -366,9 +375,8 @@ with gr.Blocks(theme=theme) as tts_demo:
     gr.HTML(
         """
     <div style='text-align: center'>
-        <h1>
-            Text-to-Speech Generation With Typhoon2 Audio
-        </h1>
+        <h1>Text-to-Speech Generation With Typhoon2-Audio</h1><br>
+        TTS functionality is based on the speech generation modules of Typhoon2-Audio, and it is optimized on Thai synthesized speech.
     </div>
     """
     )
@@ -532,13 +540,10 @@ with gr.Blocks(theme=theme) as rtc_demo:
         """
     <div style='text-align: center'>
         <h1>
-            Talk To Typhoon 2 Audio (Powered by WebRTC ⚡️)
+            Talk To Typhoon2-Audio (Powered by WebRTC ⚡️)
         </h1>
         <p>
-            Each conversation is limited to 60 seconds. Once the time limit is up you can rejoin the conversation.
-        </p>
-        <p>
-            Please use earphone, due to voice activity detection is fired on output speech on speaker.
+            Each conversation is limited to 60 seconds. Once the time limit is up you can rejoin the conversation. Please use earphone, due to voice activity detection is fired on output speech on speaker. This WebRTC demo does not work properly on some devices.
         </p>
     </div>
     """
@@ -592,21 +597,26 @@ with gr.Blocks(theme=theme) as rtc_demo:
         )
 
 with gr.Blocks(
-    theme=theme, title="🌪️ Typhoon2 Audio: Native Thai End-to-End Audio-Language Model"
+    theme=theme, title="Typhoon2-Audio: Speech-in Speech-out Audio-Language Model optimized for Thai"
 ) as demo:
     gr.Markdown(
-        """<center><h1>🌪️ Typhoon2 Audio: Native Thai End-to-End Audio-Language Model</h1></center><br/>
-        Typhoon2-Audio understands **Speech** as well as **Audio** events, and it responds in Thai and English texts
-- Its capabilities include transcription, speech translation, speech instruction following, spoken-document Q&A, audio captioning, etc.
-- The research preview model may not work well on long audio clips, particularly those exceeding 30 seconds. Text prompt can be empty for speech instruction following."""
+        """
+        <center><h1>🌪️ Typhoon2-Audio: Speech-in Speech-out Audio-Language Model optimized for Thai</h1></center><br/>
+        <ul>
+            <li>Typhoon2-Audio enhances the speech and audio-event understanding capabilities of its predecessor, Typhoon-Audio, while introducing integrated speech output functionality. This new feature allows speech output to be performed in parallel with text generation. The model is optimized for Thai, but it also supports English.</li>
+            <li>📝 <b>Technical Report</b>: <a href="https://arxiv.org/abs/2412.13702" target="_blank">https://arxiv.org/abs/2412.13702 (Section 5)</a></li>
+            <li>💻 <b>Code</b>: <a href="https://github.com/scb-10x/typhoon2-audio/" target="_blank">https://github.com/scb-10x/typhoon2-audio/</a></li>
+            <li>🤗 <b>Model weights</b>: <a href="https://huggingface.co/scb10x/llama3.1-typhoon2-audio-8b-instruct" target="_blank">https://huggingface.co/scb10x/llama3.1-typhoon2-audio-8b-instruct</a></li>
+        </ul>
+        """
     )
     gr.TabbedInterface(
         [omni_demo, processing_demo, tts_demo, rtc_demo],
         [
-            "Conversation Demo",
-            "Audio Processing Demo",
-            "Text-to-Speech Demo",
-            "Real-Time Conversation Demo (WebRTC)",
+            "Conversation",
+            "Audio Processing",
+            "Text-to-Speech",
+            "Real-Time Conversation (WebRTC)",
         ],
         theme=theme,
     )
@@ -615,7 +625,7 @@ with gr.Blocks(
 The responses generated by this Artificial Intelligence (AI) system are autonomously constructed and do not necessarily reflect the views or positions of the developing organizations, their affiliates, or any of their employees. These AI-generated responses do not represent those of the organizations. The organizations do not endorse, support, sanction, encourage, verify, or agree with the comments, opinions, or statements generated by this AI. The information produced by this AI is not intended to malign any religion, ethnic group, club, organization, company, individual, anyone, or anything. It is not the intent of the organizations to malign any group or individual. The AI operates based on its programming and training data and its responses should not be interpreted as the explicit intent or opinion of the organizations.
 
 ### Terms of use
-By using this service, users are required to agree to the following terms: The service is a research preview intended for non-commercial use only. It only provides limited safety measures and may generate offensive content. It must not be used for any illegal, harmful, violent, racist, or sexual purposes. Audio language models are prone to hallucinations to a greater extent compared to text-only LLMs. A known limitation is that the current version cannot handle audio longer than 30 seconds. The service may collect user dialogue data for future research.
+By using this service, users are required to agree to the following terms: The service is a research preview intended for non-commercial use only. It only provides limited safety measures and may generate offensive content. It must not be used for any illegal, harmful, violent, racist, or sexual purposes. Audio language models are prone to hallucinations to a greater extent compared to text-only LLMs.
 
 ### License
 This project utilizes certain datasets and checkpoints that are subject to their respective original licenses. Users must comply with all terms and conditions of these original licenses. The content of this project itself is licensed under the Apache license 2.0."""
