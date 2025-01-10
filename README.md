@@ -6,6 +6,7 @@ Typhoon2-Audio
 
 - Technical Report: [Typhoon 2: A Family of Open Text and Multimodal Thai Large Language Models](https://arxiv.org/abs/2412.13702) (Section 5)
 - Model Weights: https://huggingface.co/scb10x/llama3.1-typhoon2-audio-8b-instruct
+- Demo: https://audio.opentyphoon.ai/
 
 <p align="center">
     <img src="assets/typhoon2_audio.png" width="25%"> <br>
@@ -134,6 +135,13 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 ## To run a demo
 
 - Demo: https://audio.opentyphoon.ai/
+
+Additional packages for hosting the demo:
+```
+pip install gradio_webrtc==0.0.27
+pip install twilio==9.4.1
+pip install onnxruntime-gpu==1.20.1
+```
 
 ```
 python demo.py
