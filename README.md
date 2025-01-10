@@ -134,7 +134,6 @@ y = model.synthesize_speech("Hello, my name is ไต้ฝุ่น I am a lang
 ## To run a demo
 
 - Demo: https://audio.opentyphoon.ai/
-- Currently, streaming speech output feature is still under development, any PR is welcome!
 
 ```
 python demo.py
@@ -153,7 +152,7 @@ Note: GPU is required to run a demo
 - [x] Implement `.forward()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Implement `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Allow streaming for `.generate()` for `Typhoon2AudioForConditionalGeneration`
-- [ ] Allow streaming for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
+- [x] Allow streaming for `.generate_stream()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Allow multi-turn for `.generate()` for `Typhoon2AudioForConditionalGeneration`
 - [x] Allow multi-turn for `.generate()` for `Typhoon2Audio2AudioForConditionalGeneration`
 - [x] Add TTS functionality to `Typhoon2Audio2AudioForConditionalGeneration`

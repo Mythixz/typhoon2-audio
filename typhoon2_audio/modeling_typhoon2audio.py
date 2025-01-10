@@ -2,7 +2,7 @@
 Some of the code is adapted from:
 1. ByteDance's SALMONN (https://github.com/bytedance/SALMONN)
 2. Llama-Omni (https://github.com/ictnlp/LLaMA-Omni/)
-Please follow the copyright of the original projects. 
+Please follow the copyright of the original projects.
 """
 
 # ---------------------------------------------------- #
@@ -1086,43 +1086,6 @@ class Typhoon2AudioForConditionalGeneration(PreTrainedModel, GenerationMixin):
             return_dict=return_dict,
         )
         return outputs
-
-    # def forward(
-    #     self,
-    #     input_ids: torch.LongTensor = None,
-    #     attention_mask: Optional[torch.Tensor] = None,
-    #     position_ids: Optional[torch.LongTensor] = None,
-    #     past_key_values: Optional[List[torch.FloatTensor]] = None,
-    #     inputs_embeds: Optional[torch.FloatTensor] = None,
-    #     labels: Optional[torch.LongTensor] = None,
-    #     use_cache: Optional[bool] = None,
-    #     output_attentions: Optional[bool] = None,
-    #     output_hidden_states: Optional[bool] = None,
-    #     return_dict: Optional[bool] = None,
-    #     cache_position: Optional[torch.LongTensor] = None,
-
-    # ) -> Union[Tuple, CausalLMOutputWithPast]:
-    #     llama_output = self.llama_model.forward(
-    #         input_ids=input_ids,
-    #         attention_mask=attention_mask,
-    #         position_ids=position_ids,
-    #         past_key_values=past_key_values,
-    #         inputs_embeds=inputs_embeds,
-    #         labels=labels,
-    #         use_cache=use_cache,
-    #         output_attentions=output_attentions,
-    #         output_hidden_states=True,
-    #         return_dict=return_dict,
-    #         cache_position=cache_position,
-    #     )
-    #     loss = llama_output.loss
-    #     return CausalLMOutputWithPast(
-    #         loss=loss,
-    #         logits=llama_output.logits,
-    #         past_key_values=llama_output.past_key_values,
-    #         hidden_states=llama_output.hidden_states,
-    #         attentions=llama_output.attentions
-    #     )
 
     def generate(
         self,
