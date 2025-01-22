@@ -517,21 +517,28 @@ def response_rtc(
             buff = np.concatenate((buff, wav.cpu().numpy()))
         if buff.shape[0] > (decode_sample_rate * 2):
             yield (
-                decode_sample_rate,
-                buff.reshape(1, -1),
-                "mono",
-            ), AdditionalOutputs(dict(state=state, chatbot=state.conversation))
+                (
+                    decode_sample_rate,
+                    buff.reshape(1, -1),
+                    "mono",
+                ),
+                AdditionalOutputs(dict(state=state, chatbot=state.conversation)),
+            )
             buff = None
 
     IS_RUNNING_RTC = False
     if buff is not None and buff.shape[0] > 0:
-        yield (decode_sample_rate, buff.reshape(1, -1), "mono"), AdditionalOutputs(
-            dict(
-                state=RTCAppState(
-                    conversation=state.conversation, system_prompt=state.system_prompt
-                ),
-                chatbot=state.conversation,
-            )
+        yield (
+            (decode_sample_rate, buff.reshape(1, -1), "mono"),
+            AdditionalOutputs(
+                dict(
+                    state=RTCAppState(
+                        conversation=state.conversation,
+                        system_prompt=state.system_prompt,
+                    ),
+                    chatbot=state.conversation,
+                )
+            ),
         )
 
 
@@ -597,7 +604,8 @@ with gr.Blocks(theme=theme) as rtc_demo:
         )
 
 with gr.Blocks(
-    theme=theme, title="Typhoon2-Audio: Speech-in Speech-out Audio-Language Model optimized for Thai"
+    theme=theme,
+    title="Typhoon2-Audio: Speech-in Speech-out Audio-Language Model optimized for Thai",
 ) as demo:
     gr.Markdown(
         """
@@ -611,12 +619,12 @@ with gr.Blocks(
         """
     )
     gr.TabbedInterface(
-        [omni_demo, processing_demo, tts_demo, rtc_demo],
+        [omni_demo, processing_demo, tts_demo],  # rtc_demo
         [
             "Conversation",
             "Audio Processing",
             "Text-to-Speech",
-            "Real-Time Conversation (WebRTC)",
+            # "Real-Time Conversation (WebRTC)",
         ],
         theme=theme,
     )
