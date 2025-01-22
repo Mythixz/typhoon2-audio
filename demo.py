@@ -609,7 +609,7 @@ with gr.Blocks(
 ) as demo:
     gr.Markdown(
         """
-        <center><h1>🌪️ Typhoon2-Audio: Speech-in Speech-out Audio-Language Model optimized for Thai</h1></center><br/>
+        <center><h1>🌪️ Typhoon2-Audio (Research Preview): Speech-in Speech-out Audio-Language Model optimized for Thai</h1></center><br/>
         <ul>
             <li>Typhoon2-Audio enhances the speech and audio-event understanding capabilities of its predecessor, Typhoon-Audio, while introducing integrated speech output functionality. This new feature allows speech output to be performed in parallel with text generation. The model is optimized for Thai, but it also supports English.</li>
             <li>📝 <b>Technical Report</b>: <a href="https://arxiv.org/abs/2412.13702" target="_blank">https://arxiv.org/abs/2412.13702 (Section 5)</a></li>
