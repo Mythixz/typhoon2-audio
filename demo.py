@@ -606,6 +606,7 @@ with gr.Blocks(theme=theme) as rtc_demo:
 with gr.Blocks(
     theme=theme,
     title="Typhoon2-Audio: Speech-in Speech-out Audio-Language Model optimized for Thai",
+    css="footer {visibility: hidden}",
 ) as demo:
     gr.Markdown(
         """
