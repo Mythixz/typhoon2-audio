@@ -47,6 +47,7 @@ model.to("cuda")
 ```
 
 ### Inference - Single turn example
+*Note that*: audio file (`audio_url`) must be 16000 Hz.
 ```python
 conversation = [
     {"role": "system", "content": "You are a helpful female assistant named ไต้ฝุ่น."},
@@ -78,6 +79,7 @@ x = model.generate(
 ```
 
 ### Inference - Multi turn example
+*Note that*: audio file (`audio_url`) must be 16000 Hz.
 ```python
 conversation_multi_turn = [
     {
