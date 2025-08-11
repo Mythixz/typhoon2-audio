@@ -1,0 +1,36 @@
+# CUDA-enabled backend for Typhoon2-Audio
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System deps + Python 3.10
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3.10 python3.10-venv python3-pip git curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Preinstall pinned Python deps
+RUN python3 -m pip install --upgrade pip==24.0
+
+# FastAPI and runtime deps
+RUN pip3 install fastapi==0.111.0 uvicorn==0.30.1 pydantic==2.8.2 numpy==2.1.1 soundfile==0.12.1
+
+# Typhoon2-Audio deps (GPU)
+# transformers pinned per repo README, torch CUDA 12.1, fairseq and flash-attn
+RUN pip3 install transformers==4.45.2 && \
+    pip3 install torch==2.3.0+cu121 --index-url https://download.pytorch.org/whl/cu121 && \
+    pip3 install fairseq==0.12.2 && \
+    pip3 install flash-attn==2.5.9.post1
+
+# Copy project
+COPY . /app
+
+# Runtime env
+ENV USE_TYPHOON_TTS=true \
+    TYPHOON_DEVICE=cuda
+
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"] 
