@@ -8,6 +8,8 @@ import os
 import wave
 import numpy as np
 import soundfile as sf
+import time
+import random
 
 from . import typhoon_tts
 
@@ -42,6 +44,9 @@ class ChatResponse(BaseModel):
     ai_response: str
     suggestions: List[str]
     tts_audio_url: str
+    # lightweight add-ons for hackathon
+    candidates: List[str] = []
+    kb: List[Dict[str, str]] = []
 
 
 def get_suggestions(message: str) -> List[str]:
@@ -97,6 +102,17 @@ def generate_tts_audio(text: str) -> str:
     except Exception as e:
         print(f"[backend] Typhoon TTS failed, falling back: {e}")
 
+    # Fallback to gTTS (CPU, Thai supported)
+    try:
+        from gtts import gTTS
+        tts = gTTS(text=text, lang="th")
+        mp3_tmp = file_path.replace(".wav", ".mp3")
+        tts.save(mp3_tmp)
+        # Convert mp3 -> wav via soundfile not supported. We will just serve mp3 directly.
+        return f"/audio/{os.path.basename(mp3_tmp)}"
+    except Exception as e:
+        print(f"[backend] gTTS failed, falling back to tone: {e}")
+
     # Fallback to an audible tone
     try:
         generate_tone_wav(file_path)
@@ -105,12 +121,39 @@ def generate_tts_audio(text: str) -> str:
     return f"/audio/{filename}"
 
 
+# --- Hackathon-lite helpers ---
+
+def generate_candidates(user_message: str) -> List[str]:
+    msg = (user_message or "").strip()
+    base = [
+        "สวัสดีค่ะ ดิฉันยินดีให้ความช่วยเหลือค่ะ ต้องการติดต่อเรื่องใดคะ",
+        "รบกวนขอรายละเอียดเพิ่มเติม เช่น เลขที่ลูกค้า/หมายเลขอ้างอิง เพื่อช่วยตรวจสอบได้เร็วขึ้นค่ะ",
+        "ขอบคุณค่ะ ขอตรวจสอบข้อมูลสักครู่ กรุณาถือสายรอเล็กน้อยนะคะ",
+    ]
+    if "โปร" in msg or "promotion" in msg.lower():
+        base.insert(1, "ขอแจ้งโปรโมชันปัจจุบัน พร้อมเงื่อนไขคร่าวๆ ให้ทราบนะคะ ต้องการสมัครเลยไหมคะ")
+    if "บัตร" in msg or "เครดิต" in msg:
+        base.insert(1, "ต้องการเช็คสถานะบัตร/วงเงิน/เพิ่มวงเงิน ใช่ไหมคะ")
+    return base[:4]
+
+
+def get_kb_snippets(user_message: str) -> List[Dict[str, str]]:
+    # stub KB for demo
+    return [
+        {"title": "คู่มือการยืนยันตัวตน", "snippet": "เตรียมบัตร ปชช. และข้อมูลวันเกิด เพื่อยืนยันก่อนดำเนินการ."},
+        {"title": "โปรโมชันปัจจุบัน", "snippet": "แพ็กเสริมอินเทอร์เน็ต 10GB/99บาท ต่ออายุอัตโนมัติยกเลิกได้ทุกเมื่อ."},
+    ]
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     ai_text = "สวัสดีครับ/ค่ะ ยินดีต้อนรับสู่ศูนย์บริการ AI Call Center"
     suggestions = get_suggestions(payload.user_message)
     tts_url = generate_tts_audio(ai_text)
-    return ChatResponse(ai_response=ai_text, suggestions=suggestions, tts_audio_url=tts_url)
+    # add candidates + kb for agent assist
+    candidates = generate_candidates(payload.user_message)
+    kb = get_kb_snippets(payload.user_message)
+    return ChatResponse(ai_response=ai_text, suggestions=suggestions, tts_audio_url=tts_url, candidates=candidates, kb=kb)
 
 
 @app.get("/health")
@@ -129,4 +172,75 @@ async def feedback_endpoint(payload: FeedbackRequest) -> Dict[str, Any]:
     return {
         "status": "received",
         "message": "ขอบคุณสำหรับข้อมูล เราจะนำไปปรับปรุงระบบ",
-    } 
+    }
+
+
+# --- New: simple /speak endpoint for TTS any text ---
+class SpeakRequest(BaseModel):
+    text: str
+
+
+class SpeakResponse(BaseModel):
+    tts_audio_url: str
+
+
+@app.post("/speak", response_model=SpeakResponse)
+async def speak_endpoint(payload: SpeakRequest) -> SpeakResponse:
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="missing text")
+    url = generate_tts_audio(text)
+    return SpeakResponse(tts_audio_url=url)
+
+
+# --- Minimal OTP API (mock provider; replaceable with AIS OTP) ---
+OTP_EXPIRY_SECONDS = 180
+OTP_STORE: Dict[str, Dict[str, Any]] = {}
+
+
+class OtpSendRequest(BaseModel):
+    phone: str
+
+
+class OtpSendResponse(BaseModel):
+    request_id: str
+
+
+class OtpVerifyRequest(BaseModel):
+    request_id: str
+    code: str
+
+
+class OtpVerifyResponse(BaseModel):
+    verified: bool
+
+
+@app.post("/otp/send", response_model=OtpSendResponse)
+async def otp_send(payload: OtpSendRequest) -> OtpSendResponse:
+    phone = (payload.phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="missing phone")
+    request_id = uuid.uuid4().hex
+    code = f"{random.randint(0, 999999):06d}"
+    OTP_STORE[request_id] = {
+        "phone": phone,
+        "code": code,
+        "ts": time.time(),
+    }
+    print(f"[otp] request_id={request_id} phone={phone} code={code}")
+    # TODO: integrate AIS OTP here if credentials available
+    return OtpSendResponse(request_id=request_id)
+
+
+@app.post("/otp/verify", response_model=OtpVerifyResponse)
+async def otp_verify(payload: OtpVerifyRequest) -> OtpVerifyResponse:
+    req = OTP_STORE.get(payload.request_id)
+    if not req:
+        return OtpVerifyResponse(verified=False)
+    if time.time() - req["ts"] > OTP_EXPIRY_SECONDS:
+        OTP_STORE.pop(payload.request_id, None)
+        return OtpVerifyResponse(verified=False)
+    ok = payload.code.strip() == req["code"]
+    if ok:
+        OTP_STORE.pop(payload.request_id, None)
+    return OtpVerifyResponse(verified=ok) 
