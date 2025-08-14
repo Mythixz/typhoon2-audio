@@ -20,10 +20,15 @@ os.makedirs(STATIC_AUDIO_DIR, exist_ok=True)
 
 app = FastAPI(title="AI Call Center Backend (POC)")
 
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+# --- CORS origins configurable via env ---
+_origins_env = os.getenv("ALLOW_ORIGINS", "").strip()
+if _origins_env:
+    origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
+else:
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
