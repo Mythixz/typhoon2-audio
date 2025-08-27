@@ -1,251 +1,536 @@
-from fastapi import FastAPI, HTTPException
+"""
+FastAPI application for lightweight TTS/STT testing
+Uses gTTS + pyttsx3 for TTS and Google Cloud Speech-to-Text + SpeechRecognition for STT
+"""
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import List, Dict, Any
-import uuid
-import os
-import wave
 import numpy as np
 import soundfile as sf
-import time
-import random
+import io
+import logging
+from typing import Optional
+import tempfile
+import os
 
-from . import typhoon_tts
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(APP_DIR, os.pardir))
-STATIC_AUDIO_DIR = os.path.join(PROJECT_ROOT, "static", "audio")
-os.makedirs(STATIC_AUDIO_DIR, exist_ok=True)
+# Lightweight TTS/STT imports
+try:
+    from gtts import gTTS
+    import pyttsx3
+    import speech_recognition as sr
+    TTS_AVAILABLE = True
+except ImportError:
+    TTS_AVAILABLE = False
+    logger.warning("Some TTS/STT libraries not available. Install with: pip install gtts pyttsx3 SpeechRecognition")
 
-app = FastAPI(title="AI Call Center Backend (POC)")
+app = FastAPI(
+    title="Lightweight TTS/STT API",
+    description="Fast TTS/STT API using lightweight models for testing",
+    version="1.0.0"
+)
 
-# --- CORS origins configurable via env ---
-_origins_env = os.getenv("ALLOW_ORIGINS", "").strip()
-if _origins_env:
-    origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
-else:
-    origins = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
-
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Allow all origins for testing
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.mount("/audio", StaticFiles(directory=STATIC_AUDIO_DIR), name="audio")
+# Initialize lightweight TTS engines
+tts_engines = {}
 
-
-class ChatRequest(BaseModel):
-    user_message: str
-
-
-class ChatResponse(BaseModel):
-    ai_response: str
-    suggestions: List[str]
-    tts_audio_url: str
-    # lightweight add-ons for hackathon
-    candidates: List[str] = []
-    kb: List[Dict[str, str]] = []
-
-
-def get_suggestions(message: str) -> List[str]:
-    text = (message or "").strip()
-    lower_text = text.lower()
-
-    if "โปรโมชั่น" in text or "promotion" in lower_text:
-        return [
-            "ดูโปรโมชั่นปัจจุบัน",
-            "สอบถามโปรโมชั่นพิเศษ",
-            "ยกเลิกโปรโมชั่น",
-            "ข้อมูลเงื่อนไขโปรโมชั่น",
-        ]
-    if "บัตร" in text or "เครดิต" in text or "credit" in lower_text:
-        return [
-            "ตรวจสอบวงเงินคงเหลือ",
-            "เช็คสถานะบัตร",
-            "ขอเพิ่มวงเงิน",
-            "ขอปิดบัตร",
-        ]
-    if "โอน" in text or "transfer" in lower_text:
-        return [
-            "โอนเงินระหว่างบัญชี",
-            "โอนต่างธนาคาร",
-            "กำหนดรายการโปรด",
-            "ตรวจสอบค่าธรรมเนียม",
-        ]
-    return [
-        "ตรวจสอบยอดคงเหลือ",
-        "เช็คสถานะคำขอ",
-        "ติดต่อเจ้าหน้าที่",
-        "สอบถามข้อมูลผลิตภัณฑ์",
-    ]
-
-
-def generate_tone_wav(file_path: str, duration_seconds: float = 1.0, framerate: int = 16000, freq: float = 440.0, amplitude: float = 0.2):
-    t = np.linspace(0, duration_seconds, int(duration_seconds * framerate), endpoint=False)
-    samples = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
-    sf.write(file_path, samples, framerate, format="WAV")
-
-
-def generate_tts_audio(text: str) -> str:
-    filename = f"tts_{uuid.uuid4().hex}.wav"
-    file_path = os.path.join(STATIC_AUDIO_DIR, filename)
-
-    # Try Typhoon2-Audio TTS if enabled
+def init_tts_engines():
+    """Initialize lightweight TTS engines"""
+    global tts_engines
+    
+    if not TTS_AVAILABLE:
+        return False
+    
     try:
-        result = typhoon_tts.synthesize(text)
-        if result is not None:
-            wav, sr = result
-            sf.write(file_path, wav.T, sr, format="WAV")
-            return f"/audio/{filename}"
+        # Initialize pyttsx3 (offline TTS)
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 150)
+        engine.setProperty('volume', 0.9)
+        tts_engines['pyttsx3'] = engine
+        
+        logger.info("✅ pyttsx3 TTS engine initialized")
+        return True
     except Exception as e:
-        print(f"[backend] Typhoon TTS failed, falling back: {e}")
+        logger.error(f"Failed to initialize pyttsx3: {e}")
+        return False
 
-    # Fallback to gTTS (CPU, Thai supported)
+def synthesize_text(text: str, language: str = "en") -> tuple:
+    """
+    Synthesize text to speech using lightweight engines
+    
+    Args:
+        text: Text to synthesize
+        language: Language code
+    
+    Returns:
+        Tuple of (audio_data, sample_rate)
+    """
+    if not TTS_AVAILABLE:
+        return None, None
+    
     try:
-        from gtts import gTTS
-        tts = gTTS(text=text, lang="th")
-        mp3_tmp = file_path.replace(".wav", ".mp3")
-        tts.save(mp3_tmp)
-        # Convert mp3 -> wav via soundfile not supported. We will just serve mp3 directly.
-        return f"/audio/{os.path.basename(mp3_tmp)}"
+        # Try gTTS first (online, better quality)
+        if language in ['th', 'en']:
+            tts = gTTS(text=text, lang=language, slow=False)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                tts.save(tmp_file.name)
+                tmp_file_path = tmp_file.name
+            
+            # Load audio and convert to numpy array
+            audio_data, sample_rate = sf.read(tmp_file_path)
+            
+            # Clean up temp file
+            os.unlink(tmp_file_path)
+            
+            logger.info(f"✅ gTTS synthesis successful: {len(audio_data)} samples, {sample_rate} Hz")
+            return audio_data, sample_rate
+            
     except Exception as e:
-        print(f"[backend] gTTS failed, falling back to tone: {e}")
-
-    # Fallback to an audible tone
+        logger.warning(f"gTTS failed: {e}, trying pyttsx3")
+    
     try:
-        generate_tone_wav(file_path)
+        # Fallback to pyttsx3 (offline)
+        if 'pyttsx3' in tts_engines:
+            engine = tts_engines['pyttsx3']
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                engine.save_to_file(text, tmp_file.name)
+                engine.runAndWait()
+                tmp_file_path = tmp_file.name
+            
+            # Load audio
+            audio_data, sample_rate = sf.read(tmp_file_path)
+            
+            # Clean up temp file
+            os.unlink(tmp_file_path)
+            
+            logger.info(f"✅ pyttsx3 synthesis successful: {len(audio_data)} samples, {sample_rate} Hz")
+            return audio_data, sample_rate
+            
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ไม่สามารถสร้างไฟล์เสียงได้: {e}")
-    return f"/audio/{filename}"
+        logger.error(f"All TTS engines failed: {e}")
+        return None, None
 
+def transcribe_audio_lightweight(audio_data: np.ndarray, sample_rate: int) -> str:
+    """
+    Transcribe audio using lightweight STT
+    
+    Args:
+        audio_data: Audio data as numpy array
+        sample_rate: Sample rate of audio
+    
+    Returns:
+        Transcribed text
+    """
+    if not TTS_AVAILABLE:
+        return None
+    
+    try:
+        # Save audio to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+            sf.write(tmp_file.name, audio_data, sample_rate)
+            tmp_file_path = tmp_file.name
+        
+        # Use SpeechRecognition
+        recognizer = sr.Recognizer()
+        
+        with sr.AudioFile(tmp_file_path) as source:
+            audio = recognizer.record(source)
+        
+        # Try Google Speech Recognition (online)
+        try:
+            text = recognizer.recognize_google(audio, language='th-TH')
+            logger.info("✅ Google Speech Recognition successful")
+        except sr.UnknownValueError:
+            logger.warning("Google Speech Recognition could not understand audio")
+            text = None
+        except sr.RequestError as e:
+            logger.warning(f"Google Speech Recognition service error: {e}")
+            text = None
+        
+        # Clean up temp file
+        os.unlink(tmp_file_path)
+        
+        return text
+        
+    except Exception as e:
+        logger.error(f"STT transcription failed: {e}")
+        return None
 
-# --- Hackathon-lite helpers ---
+def is_tts_ready() -> bool:
+    """Check if TTS engines are ready"""
+    return TTS_AVAILABLE and len(tts_engines) > 0
 
-def generate_candidates(user_message: str) -> List[str]:
-    msg = (user_message or "").strip()
-    base = [
-        "สวัสดีค่ะ ดิฉันยินดีให้ความช่วยเหลือค่ะ ต้องการติดต่อเรื่องใดคะ",
-        "รบกวนขอรายละเอียดเพิ่มเติม เช่น เลขที่ลูกค้า/หมายเลขอ้างอิง เพื่อช่วยตรวจสอบได้เร็วขึ้นค่ะ",
-        "ขอบคุณค่ะ ขอตรวจสอบข้อมูลสักครู่ กรุณาถือสายรอเล็กน้อยนะคะ",
-    ]
-    if "โปร" in msg or "promotion" in msg.lower():
-        base.insert(1, "ขอแจ้งโปรโมชันปัจจุบัน พร้อมเงื่อนไขคร่าวๆ ให้ทราบนะคะ ต้องการสมัครเลยไหมคะ")
-    if "บัตร" in msg or "เครดิต" in msg:
-        base.insert(1, "ต้องการเช็คสถานะบัตร/วงเงิน/เพิ่มวงเงิน ใช่ไหมคะ")
-    return base[:4]
+@app.on_event("startup")
+async def startup_event():
+    """Initialize TTS/STT engines on startup"""
+    logger.info("Starting Lightweight TTS/STT API...")
+    
+    # Initialize TTS engines
+    if init_tts_engines():
+        logger.info("✅ TTS/STT engines are ready!")
+    else:
+        logger.warning("⚠️ TTS/STT engines failed to initialize")
 
-
-def get_kb_snippets(user_message: str) -> List[Dict[str, str]]:
-    # stub KB for demo
-    return [
-        {"title": "คู่มือการยืนยันตัวตน", "snippet": "เตรียมบัตร ปชช. และข้อมูลวันเกิด เพื่อยืนยันก่อนดำเนินการ."},
-        {"title": "โปรโมชันปัจจุบัน", "snippet": "แพ็กเสริมอินเทอร์เน็ต 10GB/99บาท ต่ออายุอัตโนมัติยกเลิกได้ทุกเมื่อ."},
-    ]
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
-    ai_text = "สวัสดีครับ/ค่ะ ยินดีต้อนรับสู่ศูนย์บริการ AI Call Center"
-    suggestions = get_suggestions(payload.user_message)
-    tts_url = generate_tts_audio(ai_text)
-    # add candidates + kb for agent assist
-    candidates = generate_candidates(payload.user_message)
-    kb = get_kb_snippets(payload.user_message)
-    return ChatResponse(ai_response=ai_text, suggestions=suggestions, tts_audio_url=tts_url, candidates=candidates, kb=kb)
-
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "message": "Lightweight TTS/STT API is running! 🚀",
+        "status": "healthy",
+        "tts_ready": is_tts_ready()
+    }
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
-    return {"status": "ok", "typhoon_tts": typhoon_tts.is_enabled()}
-
-
-# Feedback endpoint for Human-in-the-Loop simulation
-class FeedbackRequest(BaseModel):
-    original_message: str
-    corrected_message: str
-
-
-@app.post("/feedback")
-async def feedback_endpoint(payload: FeedbackRequest) -> Dict[str, Any]:
+async def health_check():
+    """Detailed health check"""
     return {
-        "status": "received",
-        "message": "ขอบคุณสำหรับข้อมูล เราจะนำไปปรับปรุงระบบ",
+        "status": "healthy",
+        "tts_ready": is_tts_ready(),
+        "timestamp": "2024-01-01T00:00:00Z"
     }
 
+@app.post("/chat")
+async def chat_endpoint(user_message: str = Form(...)):
+    """
+    Chat endpoint that converts text to speech
+    
+    Args:
+        user_message: Text message from user
+    
+    Returns:
+        Audio file as streaming response
+    """
+    logger.info(f"Chat request received: '{user_message[:50]}...'")
+    
+    if not user_message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    try:
+        # Convert text to speech
+        audio_data, sample_rate = synthesize_text(user_message, language="th")
+        
+        if audio_data is None:
+            raise HTTPException(status_code=500, detail="Failed to synthesize speech")
+        
+        # Convert to WAV format
+        audio_buffer = io.BytesIO()
+        sf.write(audio_buffer, audio_data, sample_rate, format='WAV')
+        audio_buffer.seek(0)
+        
+        logger.info(f"Speech synthesis successful for: '{user_message[:30]}...'")
+        
+        # Return audio as streaming response
+        return StreamingResponse(
+            audio_buffer,
+            media_type="audio/wav",
+            headers={"Content-Disposition": "attachment; filename=chat_response.wav"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-# --- New: simple /speak endpoint for TTS any text ---
-class SpeakRequest(BaseModel):
-    text: str
+@app.post("/stt")
+async def stt_endpoint(audio_file: UploadFile = File(...)):
+    """
+    Speech-to-Text endpoint using Google Cloud Speech-to-Text API (FREE)
+    
+    Args:
+        audio_file: Audio file to transcribe
+    
+    Returns:
+        JSON with transcribed text and metadata
+    """
+    logger.info(f"STT request received: {audio_file.filename}")
+    
+    if not audio_file.filename:
+        raise HTTPException(status_code=400, detail="Audio file is required")
+    
+    try:
+        # Read audio file content
+        content = await audio_file.read()
+        
+        # Try Google Cloud Speech-to-Text API first (FREE tier)
+        try:
+            from google.cloud import speech
+            import io
+            
+            # Create a temporary file for the audio
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                tmp_file.write(content)
+                tmp_file_path = tmp_file.name
+            
+            try:
+                # Initialize Google Cloud Speech client
+                client = speech.SpeechClient()
+                
+                # Read the audio file
+                with open(tmp_file_path, "rb") as audio_file_obj:
+                    content_audio = audio_file_obj.read()
+                
+                # Configure audio and recognition settings
+                audio = speech.RecognitionAudio(content=content_audio)
+                config = speech.RecognitionConfig(
+                    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                    sample_rate_hertz=16000,  # Default sample rate
+                    language_code="th-TH",  # Thai language
+                    enable_automatic_punctuation=True,
+                    enable_word_time_offsets=False,
+                    enable_word_confidence=True,
+                )
+                
+                # Perform the transcription
+                response = client.recognize(config=config, audio=audio)
+                
+                if response.results:
+                    transcribed_text = response.results[0].alternatives[0].transcript
+                    confidence = response.results[0].alternatives[0].confidence
+                    
+                    logger.info(f"✅ STT successful with Google Cloud Speech: {confidence:.2f}")
+                    
+                    return {
+                        "text": transcribed_text,
+                        "confidence": confidence,
+                        "emotion": "neutral",
+                        "emotion_confidence": 0.6,
+                        "engine": "google_cloud_speech"
+                    }
+                else:
+                    logger.warning("Google Cloud Speech returned no results")
+                    return {
+                        "text": "ขออภัยครับ ไม่สามารถแปลงเสียงเป็นข้อความได้ กรุณาลองใหม่อีกครั้ง",
+                        "confidence": 0.0,
+                        "emotion": "neutral",
+                        "emotion_confidence": 0.0,
+                        "engine": "fallback"
+                    }
+                
+            finally:
+                # Clean up temp file
+                if os.path.exists(tmp_file_path):
+                    os.unlink(tmp_file_path)
+                    
+        except Exception as e:
+            logger.warning(f"Google Cloud Speech failed: {e}, trying fallback methods")
+            
+            # Fallback to wave module
+            try:
+                import wave
+                import numpy as np
+                
+                # Create a temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                    tmp_file.write(content)
+                    tmp_file_path = tmp_file.name
+                
+                try:
+                    with wave.open(tmp_file_path, 'rb') as wav_file:
+                        # Get audio parameters
+                        frames = wav_file.getnframes()
+                        sample_rate = wav_file.getframerate()
+                        channels = wav_file.getnchannels()
+                        sample_width = wav_file.getsampwidth()
+                        
+                        # Read audio data
+                        audio_data = wav_file.readframes(frames)
+                        
+                        # Convert to numpy array
+                        if sample_width == 2:  # 16-bit
+                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                        elif sample_width == 4:  # 32-bit
+                            audio_array = np.frombuffer(audio_data, dtype=np.int32)
+                        else:  # 8-bit
+                            audio_array = np.frombuffer(audio_data, dtype=np.uint8)
+                        
+                        # Convert to float32 and normalize
+                        audio_array = audio_array.astype(np.float32) / (2**(sample_width*8-1))
+                        
+                        # If stereo, convert to mono
+                        if channels == 2:
+                            audio_array = audio_array.reshape(-1, 2).mean(axis=1)
+                        
+                        logger.info(f"✅ Audio loaded with wave: {len(audio_array)} samples, {sample_rate} Hz, {channels} channels")
+                        
+                        # Use transcribe_audio_lightweight function
+                        transcribed_text = transcribe_audio_lightweight(audio_array, sample_rate)
+                        
+                        if transcribed_text:
+                            logger.info("✅ STT successful with wave")
+                            return {
+                                "text": transcribed_text,
+                                "confidence": 0.8,
+                                "emotion": "neutral",
+                                "emotion_confidence": 0.6,
+                                "engine": "wave"
+                            }
+                        else:
+                            logger.warning("Transcription returned None, using fallback")
+                            return {
+                                "text": "ขออภัยครับ ไม่สามารถแปลงเสียงเป็นข้อความได้ กรุณาลองใหม่อีกครั้ง",
+                                "confidence": 0.0,
+                                "emotion": "neutral",
+                                "emotion_confidence": 0.0,
+                                "engine": "fallback"
+                            }
+                            
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(tmp_file_path):
+                        os.unlink(tmp_file_path)
+                        
+            except Exception as e:
+                logger.warning(f"wave failed: {e}, trying SpeechRecognition directly")
+                
+                # Final fallback to SpeechRecognition directly
+                try:
+                    recognizer = sr.Recognizer()
+                    
+                    # Create a temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                        tmp_file.write(content)
+                        tmp_file_path = tmp_file.name
+                    
+                    try:
+                        with sr.AudioFile(tmp_file_path) as source:
+                            audio = recognizer.record(source)
+                        
+                        # Try Google Speech Recognition
+                        try:
+                            text = recognizer.recognize_google(audio, language='th-TH')
+                            logger.info("✅ STT successful with Google")
+                            
+                            return {
+                                "text": text,
+                                "confidence": 0.8,
+                                "emotion": "neutral",
+                                "emotion_confidence": 0.6,
+                                "engine": "google_speech"
+                            }
+                            
+                        except sr.UnknownValueError:
+                            logger.warning("Google Speech Recognition could not understand audio")
+                            return {
+                                "text": "ขออภัยครับ ไม่สามารถแปลงเสียงเป็นข้อความได้ กรุณาลองใหม่อีกครั้ง",
+                                "confidence": 0.0,
+                                "emotion": "neutral",
+                                "emotion_confidence": 0.0,
+                                "engine": "fallback"
+                            }
+                            
+                        except sr.RequestError as e:
+                            logger.warning(f"Google Speech Recognition service error: {e}")
+                            return {
+                                "text": "ขออภัยครับ ไม่สามารถเชื่อมต่อกับ Google Speech Recognition ได้ กรุณาลองใหม่อีกครั้ง",
+                                "confidence": 0.0,
+                                "emotion": "neutral",
+                                "emotion_confidence": 0.0,
+                                "engine": "fallback"
+                            }
+                            
+                    finally:
+                        # Clean up temp file
+                        if os.path.exists(tmp_file_path):
+                            os.unlink(tmp_file_path)
+                            
+                except Exception as e:
+                    logger.error(f"SpeechRecognition failed: {e}")
+                    return {
+                        "text": "ขออภัยครับ SpeechRecognition ไม่พร้อมใช้งาน กรุณาติดตั้ง SpeechRecognition ก่อน",
+                        "confidence": 0.0,
+                        "emotion": "neutral",
+                        "emotion_confidence": 0.0,
+                        "engine": "fallback"
+                    }
+        
+    except Exception as e:
+        logger.error(f"STT endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@app.post("/tts")
+async def tts_endpoint(text: str = Form(...), language: str = Form("th")):
+    """
+    Text-to-Speech endpoint
+    
+    Args:
+        text: Text to convert to speech
+        language: Language code (default: th)
+    
+    Returns:
+        Audio file as streaming response
+    """
+    logger.info(f"TTS request received: '{text[:50]}...' (language: {language})")
+    
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    try:
+        # Convert text to speech
+        audio_data, sample_rate = synthesize_text(text, language=language)
+        
+        if audio_data is None:
+            raise HTTPException(status_code=500, detail="Failed to synthesize speech")
+        
+        # Convert to WAV format
+        audio_buffer = io.BytesIO()
+        sf.write(audio_buffer, audio_data, sample_rate, format='WAV')
+        audio_buffer.seek(0)
+        
+        logger.info(f"TTS synthesis successful for: '{text[:30]}...'")
+        
+        # Return audio as streaming response
+        return StreamingResponse(
+            audio_buffer,
+            media_type="audio/wav",
+            headers={"Content-Disposition": "attachment; filename=tts_response.wav"}
+        )
+        
+    except Exception as e:
+        logger.error(f"TTS endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-class SpeakResponse(BaseModel):
-    tts_audio_url: str
+@app.post("/speak")
+async def speak_endpoint(text: str = Form(...)):
+    """Simple speak endpoint"""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    try:
+        logger.info(f"Speak request: '{text[:50]}...'")
+        
+        # Use TTS endpoint
+        return await tts_endpoint(text, "th")
+        
+    except Exception as e:
+        logger.error(f"Speak error: {e}")
+        raise HTTPException(status_code=500, detail=f"Speak failed: {str(e)}")
 
-
-@app.post("/speak", response_model=SpeakResponse)
-async def speak_endpoint(payload: SpeakRequest) -> SpeakResponse:
-    text = (payload.text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="missing text")
-    url = generate_tts_audio(text)
-    return SpeakResponse(tts_audio_url=url)
-
-
-# --- Minimal OTP API (mock provider; replaceable with AIS OTP) ---
-OTP_EXPIRY_SECONDS = 180
-OTP_STORE: Dict[str, Dict[str, Any]] = {}
-
-
-class OtpSendRequest(BaseModel):
-    phone: str
-
-
-class OtpSendResponse(BaseModel):
-    request_id: str
-
-
-class OtpVerifyRequest(BaseModel):
-    request_id: str
-    code: str
-
-
-class OtpVerifyResponse(BaseModel):
-    verified: bool
-
-
-@app.post("/otp/send", response_model=OtpSendResponse)
-async def otp_send(payload: OtpSendRequest) -> OtpSendResponse:
-    phone = (payload.phone or "").strip()
-    if not phone:
-        raise HTTPException(status_code=400, detail="missing phone")
-    request_id = uuid.uuid4().hex
-    code = f"{random.randint(0, 999999):06d}"
-    OTP_STORE[request_id] = {
-        "phone": phone,
-        "code": code,
-        "ts": time.time(),
+@app.get("/languages")
+async def get_languages():
+    """Get available languages for TTS"""
+    return {
+        "success": True,
+        "languages": [
+            {"code": "th", "name": "Thai", "native": "ไทย"},
+            {"code": "en", "name": "English", "native": "English"}
+        ]
     }
-    print(f"[otp] request_id={request_id} phone={phone} code={code}")
-    # TODO: integrate AIS OTP here if credentials available
-    return OtpSendResponse(request_id=request_id)
 
-
-@app.post("/otp/verify", response_model=OtpVerifyResponse)
-async def otp_verify(payload: OtpVerifyRequest) -> OtpVerifyResponse:
-    req = OTP_STORE.get(payload.request_id)
-    if not req:
-        return OtpVerifyResponse(verified=False)
-    if time.time() - req["ts"] > OTP_EXPIRY_SECONDS:
-        OTP_STORE.pop(payload.request_id, None)
-        return OtpVerifyResponse(verified=False)
-    ok = payload.code.strip() == req["code"]
-    if ok:
-        OTP_STORE.pop(payload.request_id, None)
-    return OtpVerifyResponse(verified=ok) 
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000) 

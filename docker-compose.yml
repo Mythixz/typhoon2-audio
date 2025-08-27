@@ -1,4 +1,5 @@
 version: "3.9"
+
 services:
   backend:
     build:
@@ -7,14 +8,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - USE_TYPHOON_TTS=true
-      - TYPHOON_DEVICE=cuda
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: ["gpu"]
-    runtime: nvidia
+      - DEFAULT_TTS_LANGUAGE=en
+      - DEFAULT_STT_LANGUAGE=en
+      - WHISPER_MODEL_SIZE=tiny
+      - DEBUG_MODE=true
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./backend:/app/backend
+    restart: unless-stopped
 
   frontend:
     build:
@@ -25,4 +26,5 @@ services:
     environment:
       - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
     depends_on:
-      - backend 
+      - backend
+    restart: unless-stopped 
