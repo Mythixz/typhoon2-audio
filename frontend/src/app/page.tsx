@@ -24,9 +24,31 @@ export default function HomePage() {
   const [messages, setMessages] = useState<Array<{ role: "user" | "ai"; text: string; audioUrl?: string }>>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [candidates, setCandidates] = useState<string[]>([]);
-  const [kb, setKb] = useState<Array<{ title: string; snippet: string }>>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([
+    "สวัสดีครับ มีอะไรให้ช่วยเหลือไหม?",
+    "ต้องการทราบข้อมูลเกี่ยวกับบริการอะไรบ้าง?",
+    "มีปัญหาอะไรที่ต้องการความช่วยเหลือไหม?",
+    "ต้องการทดสอบระบบอะไรเป็นพิเศษไหม?"
+  ]);
+  const [candidates, setCandidates] = useState<string[]>([
+    "ขอบคุณสำหรับการต้อนรับครับ ผมต้องการทดสอบระบบแชทกับ AI",
+    "สวัสดีครับ ผมสนใจในบริการของ AI Call Center ครับ",
+    "ต้องการทราบข้อมูลเพิ่มเติมเกี่ยวกับระบบครับ"
+  ]);
+  const [kb, setKb] = useState<Array<{ title: string; snippet: string }>>([
+    {
+      title: "AI Call Center System",
+      snippet: "ระบบศูนย์บริการ AI แบบครบวงจรสำหรับผู้พิการทางการได้ยิน"
+    },
+    {
+      title: "บริการหลัก",
+      snippet: "แชทพื้นฐาน, แปลงเสียง, สนทนาสองทาง, แชทขั้นสูง"
+    },
+    {
+      title: "เทคโนโลยีที่ใช้",
+      snippet: "AI, Speech Recognition, Text-to-Speech, Emotion Detection"
+    }
+  ]);
   const [showHitl, setShowHitl] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState("");
   const [otpPhone, setOtpPhone] = useState("");
@@ -46,23 +68,26 @@ export default function HomePage() {
     setInput("");
     setLoading(true);
     setMessages((prev) => [...prev, { role: "user", text }]);
-    try {
-      const res: ChatResponse = await postChat(text);
+    
+    // Demo mode - simulate AI response
+    setTimeout(() => {
+      let aiResponse = "";
+      if (text.toLowerCase().includes("สวัสดี") || text.toLowerCase().includes("hello")) {
+        aiResponse = "สวัสดีครับ! ยินดีต้อนรับสู่ AI Call Center System ผมเป็น AI Assistant ที่พร้อมให้บริการคุณครับ มีอะไรให้ช่วยเหลือไหม?";
+      } else if (text.toLowerCase().includes("บริการ") || text.toLowerCase().includes("service")) {
+        aiResponse = "เรามีบริการหลัก 4 ประเภทครับ:\n1. แชทพื้นฐาน - สนทนากับ AI\n2. แปลงเสียง - แปลงเสียงเป็นข้อความ\n3. สนทนาสองทาง - สนทนากับ AI แบบสองทาง\n4. แชทขั้นสูง - พร้อมตรวจจับอารมณ์";
+      } else if (text.toLowerCase().includes("ทดสอบ") || text.toLowerCase().includes("test")) {
+        aiResponse = "ยินดีครับ! นี่คือการทดสอบระบบแชทกับ AI ระบบทำงานได้ปกติครับ คุณสามารถทดสอบฟีเจอร์อื่นๆ ได้เช่นกัน";
+      } else {
+        aiResponse = "ขอบคุณสำหรับข้อความครับ ผมเข้าใจแล้ว และพร้อมให้บริการคุณต่อไปครับ มีอะไรให้ช่วยเหลือเพิ่มเติมไหม?";
+      }
+      
       setMessages((prev) => [
         ...prev,
-        { role: "ai", text: res.ai_response, audioUrl: res.tts_audio_url },
+        { role: "ai", text: aiResponse },
       ]);
-      setSuggestions(res.suggestions || []);
-      setCandidates(res.candidates || []);
-      setKb(res.kb || []);
-    } catch (e: any) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: `เกิดข้อผิดพลาด: ${e?.message ?? "ไม่ทราบสาเหตุ"}` },
-      ]);
-    } finally {
       setLoading(false);
-    }
+    }, 1000);
   }
 
   async function handleEnhancedChat() {
@@ -72,55 +97,67 @@ export default function HomePage() {
     setInput("");
     setLoading(true);
     setMessages((prev) => [...prev, { role: "user", text }]);
-    try {
-      const res: ChatResponse = await postEnhancedChat(text);
+    
+    // Demo mode - simulate enhanced AI response with emotion detection
+    setTimeout(() => {
+      let aiResponse = "";
+      let emotion = "";
+      
+      if (text.toLowerCase().includes("สวัสดี") || text.toLowerCase().includes("hello")) {
+        aiResponse = "สวัสดีครับ! ยินดีต้อนรับสู่ระบบแชทขั้นสูงครับ ผมสามารถตรวจจับอารมณ์และตอบสนองตามบริบทได้ครับ";
+        emotion = "ยินดี";
+      } else if (text.toLowerCase().includes("เศร้า") || text.toLowerCase().includes("sad")) {
+        aiResponse = "ผมเข้าใจความรู้สึกของคุณครับ อย่าเพิ่งท้อใจนะครับ มีอะไรให้ผมช่วยเหลือไหม? ผมพร้อมเป็นกำลังใจให้คุณครับ";
+        emotion = "เห็นใจ";
+      } else if (text.toLowerCase().includes("โกรธ") || text.toLowerCase().includes("angry")) {
+        aiResponse = "ผมเข้าใจว่าคุณอาจจะไม่พอใจอะไรบางอย่างครับ ลองหายใจลึกๆ และบอกผมว่าเกิดอะไรขึ้นครับ";
+        emotion = "เข้าใจ";
+      } else if (text.toLowerCase().includes("ดีใจ") || text.toLowerCase().includes("happy")) {
+        aiResponse = "ดีใจด้วยครับที่คุณมีความสุข! ความสุขของคุณทำให้ผมมีความสุขด้วยครับ มีอะไรดีๆ มาบอกเล่าไหมครับ?";
+        emotion = "ยินดี";
+      } else {
+        aiResponse = "ขอบคุณสำหรับข้อความครับ ผมได้วิเคราะห์อารมณ์ของคุณแล้ว และพร้อมให้บริการต่อไปครับ";
+        emotion = "เป็นกลาง";
+      }
+      
       setMessages((prev) => [
         ...prev,
-        { role: "ai", text: res.ai_response, audioUrl: res.tts_audio_url },
+        { role: "ai", text: aiResponse },
       ]);
-      setSuggestions(res.suggestions || []);
-      setCandidates(res.candidates || []);
-      setKb(res.kb || []);
-    } catch (e: any) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: `เกิดข้อผิดพลาด: ${e?.message ?? "ไม่ทราบสาเหตุ"}` },
-      ]);
-    } finally {
+      setDetectedEmotion(emotion);
       setLoading(false);
-    }
+    }, 1500);
   }
 
   async function handleSpeak(text: string) {
     const t = text.trim();
     if (!t) return;
-    try {
-      const { tts_audio_url } = await postSpeak(t);
-      setMessages((prev) => [...prev, { role: "ai", text: t, audioUrl: tts_audio_url }]);
-    } catch (e) {
-      setMessages((prev) => [...prev, { role: "ai", text: `พูดไม่ได้: ${(e as any)?.message ?? "ไม่ทราบสาเหตุ"}` }]);
-    }
+    
+    // Demo mode - simulate TTS
+    setMessages((prev) => [...prev, { role: "ai", text: `🔊 ระบบจำลอง: "${t}" (ในเวอร์ชันจริงจะมีการแปลงข้อความเป็นเสียง)` }]);
   }
 
   async function handleOtpSend() {
     const phone = otpPhone.trim();
     if (!phone) return;
-    try {
-      const { request_id } = await postOtpSend(phone);
-      setOtpReqId(request_id);
-    } catch (e) {
-      alert(`ส่ง OTP ไม่สำเร็จ: ${(e as any)?.message ?? "ไม่ทราบสาเหตุ"}`);
-    }
+    
+    // Demo mode - simulate OTP sending
+    const demoRequestId = `demo_${Date.now()}`;
+    setOtpReqId(demoRequestId);
+    alert(`🔐 ระบบจำลอง: OTP ได้ถูกส่งไปยังเบอร์ ${phone} แล้ว\nรหัส OTP: 123456 (ในเวอร์ชันจริงจะส่ง SMS จริง)`);
   }
 
   async function handleOtpVerify() {
     if (!otpReqId) return;
-    try {
-      const { verified } = await postOtpVerify(otpReqId, otpCode.trim());
-      setOtpVerified(verified);
-      if (!verified) alert("รหัสไม่ถูกต้องหรือหมดอายุ");
-    } catch (e) {
-      alert(`ยืนยัน OTP ไม่สำเร็จ: ${(e as any)?.message ?? "ไม่ทราบสาเหตุ"}`);
+    const code = otpCode.trim();
+    
+    // Demo mode - simulate OTP verification
+    if (code === "123456") {
+      setOtpVerified(true);
+      alert("✅ ระบบจำลอง: OTP ถูกต้อง! ยืนยันตัวตนสำเร็จแล้ว (ในเวอร์ชันจริงจะเชื่อมต่อกับ AIS OTP API)");
+    } else {
+      setOtpVerified(false);
+      alert("❌ ระบบจำลอง: OTP ไม่ถูกต้อง กรุณาลองใหม่ (รหัสที่ถูกต้องคือ 123456)");
     }
   }
 
@@ -128,6 +165,23 @@ export default function HomePage() {
     setTranscriptionText(text);
     setDetectedEmotion(emotion || '');
     setInput(text); // Auto-fill the input field
+  }
+
+  // Demo mode - simulate speech transcription
+  function handleDemoSpeechTranscription() {
+    const demoTexts = [
+      "สวัสดีครับ ผมต้องการทดสอบระบบแปลงเสียงเป็นข้อความครับ",
+      "ระบบนี้ทำงานได้ดีมากครับ ผมประทับใจมาก",
+      "ต้องการทราบข้อมูลเพิ่มเติมเกี่ยวกับบริการครับ",
+      "ขอบคุณสำหรับการให้บริการครับ"
+    ];
+    const randomText = demoTexts[Math.floor(Math.random() * demoTexts.length)];
+    const emotions = ["ยินดี", "ประทับใจ", "สนใจ", "ขอบคุณ"];
+    const randomEmotion = emotions[Math.floor(Math.random() * emotions.length)];
+    
+    setTranscriptionText(randomText);
+    setDetectedEmotion(randomEmotion);
+    setInput(randomText);
   }
 
   function handleCallEnd() {
@@ -217,9 +271,9 @@ export default function HomePage() {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                   />
-                                     <div className="absolute inset-y-0 left-4 flex items-center">
-                     <span className="text-[#00A651] text-xl">✍</span>
-                   </div>
+                                                       <div className="absolute inset-y-0 left-4 flex items-center">
+                    <span className="text-[#1A1A1A] text-xl">✍</span>
+                  </div>
                 </div>
                 <div className="flex gap-3">
                                      <button
@@ -275,13 +329,19 @@ export default function HomePage() {
                </p>
             </div>
 
-            <div className="card-jump card-jump-primary p-10 animate-scale-in">
-                             <div className="text-center mb-8">
-                 <h3 className="text-2xl font-bold text-[#1A1A1A] mb-3">เริ่มต้นการบันทึกเสียง</h3>
-                 <p className="text-[#666] text-lg">คลิกปุ่มด้านล่างเพื่อเริ่มบันทึกเสียงของคุณ</p>
-               </div>
-              <div className="flex justify-center">
+                        <div className="card-jump card-jump-primary p-10 animate-scale-in">
+              <div className="text-center mb-8">
+                <h3 className="text-2xl font-bold text-[#1A1A1A] mb-3">เริ่มต้นการบันทึกเสียง</h3>
+                <p className="text-[#666] text-lg">คลิกปุ่มด้านล่างเพื่อเริ่มบันทึกเสียงของคุณ หรือทดสอบระบบด้วยข้อมูลจำลอง</p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
                 <SpeechToText onTranscriptionComplete={handleTranscriptionComplete} />
+                <button
+                  onClick={handleDemoSpeechTranscription}
+                  className="btn-jump-accent text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
+                >
+                  🎯 ทดสอบด้วยข้อมูลจำลอง
+                </button>
               </div>
             </div>
 
@@ -306,7 +366,7 @@ export default function HomePage() {
                          <h4 className="text-lg font-semibold text-[#1A1A1A]">อารมณ์ที่ตรวจพบ</h4>
                        </div>
                        <div className="inline-flex items-center gap-2 bg-gradient-to-r from-[#0066CC]/20 to-[#00A651]/20 px-4 py-2 rounded-full border border-[#0066CC]/30">
-                         <span className="text-[#0066CC] font-semibold">{detectedEmotion}</span>
+                         <span className="text-[#1A1A1A] font-semibold">{detectedEmotion}</span>
                        </div>
                      </div>
                   )}
@@ -338,14 +398,54 @@ export default function HomePage() {
 
       case 'call':
         return (
-          <div className="space-y-6">
-            <div className="card-jump card-jump-primary p-8">
-              <h2 className="text-2xl font-bold text-[#1A1A1A] mb-6 flex items-center gap-3">
-                <span className="text-[#00A651] text-3xl">📞</span>
-                การสนทนาสองทาง
-              </h2>
-              <p className="text-[#666] mb-6">ทดสอบการสนทนากับ AI Call Center แบบสองทาง พร้อมการแปลงเสียงและตรวจจับอารมณ์</p>
-              <TwoWayCall onCallEnd={handleCallEnd} />
+          <div className="space-y-8 animate-slide-up">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-[#00A651] to-[#0066CC] rounded-full mb-6">
+                <span className="text-3xl">📞</span>
+              </div>
+              <h2 className="text-4xl font-bold text-[#1A1A1A] mb-3 font-anuphan">การสนทนาสองทาง</h2>
+              <p className="text-[#666] text-xl max-w-2xl mx-auto leading-relaxed font-anuphan-medium">
+                ทดสอบการสนทนากับ AI Call Center แบบสองทาง พร้อมการแปลงเสียงและตรวจจับอารมณ์
+              </p>
+            </div>
+
+            <div className="card-jump card-jump-primary p-10 animate-scale-in">
+              <div className="text-center mb-8">
+                <h3 className="text-2xl font-bold text-[#1A1A1A] mb-3">ระบบสนทนาสองทาง</h3>
+                <p className="text-[#666] text-lg">ทดสอบการสนทนากับ AI แบบสองทาง พร้อมการแปลงเสียงและตรวจจับอารมณ์</p>
+              </div>
+              
+              <div className="space-y-6">
+                <div className="bg-gradient-to-r from-white/90 to-white/80 p-6 rounded-2xl border border-[#00A651]/30 shadow-lg">
+                  <h4 className="text-xl font-semibold text-[#1A1A1A] mb-4">สถานะการเชื่อมต่อ</h4>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-3 h-3 bg-[#00A651] rounded-full animate-pulse"></div>
+                    <span className="text-[#1A1A1A] font-medium">พร้อมใช้งาน</span>
+                  </div>
+                  <p className="text-[#666] text-sm">ระบบพร้อมสำหรับการสนทนาสองทางกับ AI</p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <button
+                    onClick={() => alert("🎯 ระบบจำลอง: เริ่มการสนทนาสองทาง\nในเวอร์ชันจริงจะมีการเชื่อมต่อกับ AI Call Center จริง")}
+                    className="btn-jump-primary text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
+                  >
+                    📞 เริ่มการสนทนา
+                  </button>
+                  <button
+                    onClick={() => alert("🎯 ระบบจำลอง: หยุดการสนทนา\nในเวอร์ชันจริงจะมีการปิดการเชื่อมต่อกับ AI Call Center")}
+                    className="btn-jump-secondary text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
+                  >
+                    ⏹️ หยุดการสนทนา
+                  </button>
+                </div>
+
+                <div className="bg-gradient-to-r from-[#00A651]/10 to-[#0066CC]/10 rounded-2xl p-6 border border-[#00A651]/20">
+                  <p className="text-sm text-[#666] text-center">
+                    <strong>หมายเหตุ:</strong> ระบบนี้เป็นเดโม่สำหรับการทดสอบ UI และ UX — ในเวอร์ชันจริงจะมีการเชื่อมต่อกับ AI Call Center จริง
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -401,7 +501,7 @@ export default function HomePage() {
     <main className="min-h-screen bg-gradient-to-br from-[#E8F5E8] via-[#F8F9FA] to-[#E6F3FF]">
       {/* Enhanced Hero Section with JUMP THAILAND Theme */}
       <div 
-        className="relative text-white py-20 overflow-hidden"
+        className="relative py-20 overflow-hidden"
         style={{
           backgroundImage: `url('https://static.wixstatic.com/media/6e391d_4b6ebe4961af4f7ea64c1909080884f9~mv2.jpg/v1/fill/w_980,h_937,al_t,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/6e391d_4b6ebe4961af4f7ea64c1909080884f9~mv2.jpg')`,
           backgroundSize: 'cover',
@@ -413,7 +513,7 @@ export default function HomePage() {
         {/* Background Pattern */}
         <div className="absolute inset-0 opacity-10">
           <div className="absolute inset-0" style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.4'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%231A1A1A' fill-opacity='0.4'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
           }}></div>
         </div>
         
@@ -428,28 +528,28 @@ export default function HomePage() {
             <div className="text-center lg:text-left">
               <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm rounded-full px-6 py-2 mb-8 border border-white/30">
                 <span className="w-2 h-2 bg-[#FFD700] rounded-full animate-pulse"></span>
-                <span className="text-sm font-medium">AI Innovation Platform</span>
+                <span className="text-sm font-medium text-[#1A1A1A]">AI Innovation Platform - DEMO MODE</span>
               </div>
               
               <h1 className="text-5xl lg:text-6xl xl:text-7xl font-bold mb-6 leading-tight font-anuphan">
-                <span className="block text-white">AI Call Center</span>
+                <span className="block text-[#1A1A1A]">AI Call Center</span>
                 <span className="block text-[#FFD700]">System</span>
               </h1>
               
-              <p className="text-xl lg:text-2xl text-white/90 mb-8 max-w-2xl lg:max-w-none leading-relaxed font-anuphan-medium">
+              <p className="text-xl lg:text-2xl text-[#1A1A1A] mb-8 max-w-2xl lg:max-w-none leading-relaxed font-anuphan-medium">
                 ระบบศูนย์บริการ AI แบบครบวงจรสำหรับผู้พิการทางการได้ยิน
                 <br className="hidden sm:block" />
                 <span className="text-[#FFD700] font-semibold">ขับเคลื่อนอนาคตด้วยนวัตกรรมในยุคปัญญาประดิษฐ์</span>
               </p>
               
                              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 mb-8">
-                 <div className="badge-jump badge-jump-accent text-sm px-4 py-2">
+                 <div className="badge-jump badge-jump-accent text-sm px-4 py-2 text-[#1A1A1A]">
                    POC v2.0
                  </div>
-                 <div className="badge-jump badge-jump-accent text-sm px-4 py-2">
+                 <div className="badge-jump badge-jump-accent text-sm px-4 py-2 text-[#1A1A1A]">
                    JUMP THAILAND Theme
                  </div>
-                 <div className="badge-jump badge-jump-accent text-sm px-4 py-2">
+                 <div className="badge-jump badge-jump-accent text-sm px-4 py-2 text-[#1A1A1A]">
                    AI-Powered
                  </div>
                </div>
@@ -465,7 +565,7 @@ export default function HomePage() {
                  >
                     เริ่มต้นใช้งาน
                   </button>
-                 <button className="border-2 border-white/30 text-white hover:bg-white/10 px-8 py-4 rounded-xl transition-all duration-300 backdrop-blur-sm">
+                 <button className="border-2 border-[#1A1A1A]/30 text-[#1A1A1A] hover:bg-[#1A1A1A]/10 px-8 py-4 rounded-xl transition-all duration-300 backdrop-blur-sm">
                    เรียนรู้เพิ่มเติม
                  </button>
               </div>
@@ -510,7 +610,7 @@ export default function HomePage() {
         
         {/* Wave Separator */}
         <div className="absolute bottom-0 left-0 right-0">
-          <svg className="w-full h-16 text-white" viewBox="0 0 1200 120" preserveAspectRatio="none">
+          <svg className="w-full h-16 text-[#1A1A1A]" viewBox="0 0 1200 120" preserveAspectRatio="none">
             <path d="M0,0V46.29c47.79,22.2,103.59,32.17,158,28,70.36-5.37,136.33-33.31,206.8-37.5C438.64,32.43,512.34,53.67,583,72.05c69.27,18,138.3,24.88,209.4,13.08,36.15-6,69.85-17.84,104.45-29.34C989.49,25,1113-14.29,1200,52.47V0Z" opacity=".25" fill="currentColor"></path>
             <path d="M0,0V15.81C13,36.92,27.64,56.86,47.69,72.05,99.41,111.27,165,111,224.58,91.58c31.15-10.15,60.09-26.07,89.67-39.8,40.92-19,84.73-46,130.83-49.67,36.26-2.85,70.9,9.42,98.6,31.56,31.77,25.39,62.32,62,103.63,73,40.44,10.71,81.35-6.69,119.13-24.28s75.16-39,116.92-43.05c59.73-5.85,113.28,22.88,168.9,38.84,30.2,8.66,59,6.17,87.09-7.5,22.43-10.89,48-26.93,65.6-42.72C1006.38,59.18,1031.56,61.29,1058,60.81c27.9-.5,56.19-9.69,82.84-21.56,31.84-14.27,65.27-35.85,92.8-54.59C1200,0,1200,0,1200,0Z" opacity=".5" fill="currentColor"></path>
             <path d="M0,0V5.63C149.93,59,314.09,71.32,475.83,42.57c43-7.64,84.23-20.12,127.61-26.46,59-8.63,112.48,12.24,165.56,35.4C827.93,77.22,886,95.24,951.2,90c86.53-7,172.46-45.71,248.8-84.81V0Z" fill="currentColor"></path>
@@ -539,7 +639,7 @@ export default function HomePage() {
                    onClick={() => setActiveTab(tab.id as TabType)}
                    className={`relative p-6 rounded-2xl text-sm font-medium transition-all duration-500 group overflow-hidden ${
                      activeTab === tab.id
-                       ? `bg-gradient-to-r ${tab.color} text-white shadow-xl transform scale-105`
+                       ? `bg-gradient-to-r ${tab.color} text-[#1A1A1A] shadow-xl transform scale-105`
                        : 'bg-white/80 text-[#666] hover:text-[#1A1A1A] hover:bg-white hover:scale-105 hover:shadow-lg'
                    }`}
                  >
@@ -547,14 +647,14 @@ export default function HomePage() {
                    <div className="relative flex flex-col items-center space-y-3">
                      <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all duration-300 ${
                        activeTab === tab.id 
-                         ? 'bg-white/20 backdrop-blur-sm' 
+                         ? 'bg-[#1A1A1A]/20 backdrop-blur-sm' 
                          : 'bg-gradient-to-br from-[#00A651]/10 to-[#0066CC]/10'
                      }`}>
                        <span className="group-hover:scale-110 transition-transform duration-300">{tab.icon}</span>
                      </div>
                      <div className="text-center">
                        <span className="font-semibold text-base block">{tab.label}</span>
-                       <span className={`text-xs opacity-75 mt-1 block ${activeTab === tab.id ? 'text-white/80' : 'text-[#666]'}`}>
+                       <span className={`text-xs opacity-75 mt-1 block ${activeTab === tab.id ? 'text-[#1A1A1A]' : 'text-[#666]'}`}>
                          {tab.desc}
                        </span>
                      </div>
@@ -589,7 +689,7 @@ export default function HomePage() {
                    <span className="text-4xl">🔐</span>
                  </div>
                  <h3 className="text-3xl font-bold text-[#1A1A1A] mb-3 font-anuphan">ยืนยันตัวตน (OTP Demo)</h3>
-                 <p className="text-[#666] text-lg font-anuphan-medium">ระบบยืนยันตัวตนด้วยรหัส OTP แบบปลอดภัย</p>
+                 <p className="text-[#666] text-lg font-anuphan-medium">ระบบยืนยันตัวตนด้วยรหัส OTP แบบปลอดภัย - โหมดเดโม</p>
                </div>
              </div>
              <div className="p-10">
@@ -603,7 +703,7 @@ export default function HomePage() {
                     onChange={(e) => setOtpPhone(e.target.value)} 
                   />
                   <div className="absolute inset-y-0 left-4 flex items-center">
-                    <span className="text-[#00A651] text-xl">📱</span>
+                    <span className="text-[#1A1A1A] text-xl">📱</span>
                   </div>
                 </div>
                                  <button 
@@ -630,7 +730,7 @@ export default function HomePage() {
                       onChange={(e) => setOtpCode(e.target.value)} 
                     />
                     <div className="absolute inset-y-0 left-4 flex items-center">
-                      <span className="text-[#0066CC] text-xl">🔢</span>
+                      <span className="text-[#1A1A1A] text-xl">🔢</span>
                     </div>
                   </div>
                   <button 
@@ -641,7 +741,7 @@ export default function HomePage() {
                     ยืนยัน
                   </button>
                                      {otpVerified ? (
-                     <div className="badge-jump badge-jump-primary text-lg px-6 py-3">
+                     <div className="badge-jump badge-jump-primary text-lg px-6 py-3 text-[#1A1A1A]">
                        ยืนยันแล้ว
                      </div>
                    ) : null}
@@ -689,9 +789,9 @@ export default function HomePage() {
                </div>
               
               <div className="flex flex-wrap items-center justify-center gap-4 text-sm">
-                <span className="badge-jump badge-jump-primary text-base px-6 py-3">AIS JUMP THAILAND</span>
-                <span className="badge-jump badge-jump-accent text-base px-6 py-3">AI Innovation</span>
-                <span className="badge-jump badge-jump-secondary text-base px-6 py-3">Inclusive Technology</span>
+                <span className="badge-jump badge-jump-primary text-base px-6 py-3 text-[#1A1A1A]">AIS JUMP THAILAND</span>
+                <span className="badge-jump badge-jump-accent text-base px-6 py-3 text-[#1A1A1A]">AI Innovation</span>
+                <span className="badge-jump badge-jump-secondary text-base px-6 py-3 text-[#1A1A1A]">Inclusive Technology</span>
               </div>
             </div>
             
@@ -699,12 +799,12 @@ export default function HomePage() {
               <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 bg-gradient-to-br from-[#00A651] to-[#0066CC] rounded-full"></div>
-                  <span className="text-[#666] font-medium">© 2024 AI Call Center System</span>
+                  <span className="text-[#1A1A1A] font-medium">© 2024 AI Call Center System</span>
                 </div>
                 <div className="flex items-center gap-6">
-                  <span className="text-[#666] hover:text-[#00A651] transition-colors cursor-pointer">นโยบายความเป็นส่วนตัว</span>
-                  <span className="text-[#666] hover:text-[#0066CC] transition-colors cursor-pointer">เงื่อนไขการใช้งาน</span>
-                  <span className="text-[#666] hover:text-[#FFD700] transition-colors cursor-pointer">ติดต่อเรา</span>
+                  <span className="text-[#1A1A1A] hover:text-[#00A651] transition-colors cursor-pointer">นโยบายความเป็นส่วนตัว</span>
+                  <span className="text-[#1A1A1A] hover:text-[#0066CC] transition-colors cursor-pointer">เงื่อนไขการใช้งาน</span>
+                  <span className="text-[#1A1A1A] hover:text-[#FFD700] transition-colors cursor-pointer">ติดต่อเรา</span>
                 </div>
               </div>
             </div>
@@ -737,7 +837,7 @@ export default function HomePage() {
         {/* Grid Pattern */}
         <div className="absolute inset-0 opacity-5">
           <div className="absolute inset-0" style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300A651' fill-opacity='0.1'%3E%3Cpath d='M0 0h100v100H0z'/%3E%3C/g%3E%3Cg fill='%230066CC' fill-opacity='0.1'%3E%3Cpath d='M0 0h50v50H0zM50 50h50v50H50z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%231A1A1A' fill-opacity='0.1'%3E%3Cpath d='M0 0h100v100H0z'/%3E%3C/g%3E%3Cg fill='%231A1A1A' fill-opacity='0.1'%3E%3Cpath d='M0 0h50v50H0zM50 50h50v50H50z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
           }}></div>
         </div>
         
