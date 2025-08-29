@@ -1,7 +1,7 @@
 // @ts-ignore
 const nextConfig: any = {
   /* config options here */
-  output: 'standalone',
+  // ลบ output: 'standalone' เพื่อให้เหมาะกับ Vercel
   experimental: {
     turbo: {
       rules: {
