@@ -6,22 +6,27 @@ import SuggestionButtons from "@/components/SuggestionButtons";
 import HITLModal from "@/components/HITLModal";
 import SpeechToText from "@/components/SpeechToText";
 import TwoWayCall from "@/components/TwoWayCall";
+import ChatTab from "@/components/ChatTab";
+import SpeechTab from "@/components/SpeechTab";
+import CallTab from "@/components/CallTab";
+import EnhancedTab from "@/components/EnhancedTab";
+import SupervisorTab from "@/components/SupervisorTab";
+import CollaborativeTab from "@/components/CollaborativeTab";
+import CRMTab from "@/components/CRMTab";
+import RAGTab from "@/components/RAGTab";
 import { 
   postChat, 
   postFeedback, 
   postSpeak, 
-  postOtpSend, 
-  postOtpVerify, 
   postEnhancedChat,
   type ChatResponse 
 } from "@/lib/api";
+import { TabType, type ChatMessage as ChatMessageType, type KnowledgeItem } from "@/types";
 import Image from "next/image";
-
-type TabType = 'chat' | 'speech' | 'call' | 'enhanced';
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabType>('chat');
-  const [messages, setMessages] = useState<Array<{ role: "user" | "ai"; text: string; audioUrl?: string }>>([]);
+  const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([
@@ -35,7 +40,7 @@ export default function HomePage() {
     "สวัสดีครับ ผมสนใจในบริการของ AI Call Center ครับ",
     "ต้องการทราบข้อมูลเพิ่มเติมเกี่ยวกับระบบครับ"
   ]);
-  const [kb, setKb] = useState<Array<{ title: string; snippet: string }>>([
+  const [kb, setKb] = useState<KnowledgeItem[]>([
     {
       title: "AI Call Center System",
       snippet: "ระบบศูนย์บริการ AI แบบครบวงจรสำหรับผู้พิการทางการได้ยิน"
@@ -51,10 +56,6 @@ export default function HomePage() {
   ]);
   const [showHitl, setShowHitl] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState("");
-  const [otpPhone, setOtpPhone] = useState("");
-  const [otpReqId, setOtpReqId] = useState<string | null>(null);
-  const [otpCode, setOtpCode] = useState("");
-  const [otpVerified, setOtpVerified] = useState(false);
   const [transcriptionText, setTranscriptionText] = useState("");
   const [detectedEmotion, setDetectedEmotion] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -137,30 +138,6 @@ export default function HomePage() {
     setMessages((prev) => [...prev, { role: "ai", text: `🔊 ระบบจำลอง: "${t}" (ในเวอร์ชันจริงจะมีการแปลงข้อความเป็นเสียง)` }]);
   }
 
-  async function handleOtpSend() {
-    const phone = otpPhone.trim();
-    if (!phone) return;
-    
-    // Demo mode - simulate OTP sending
-    const demoRequestId = `demo_${Date.now()}`;
-    setOtpReqId(demoRequestId);
-    alert(`🔐 ระบบจำลอง: OTP ได้ถูกส่งไปยังเบอร์ ${phone} แล้ว\nรหัส OTP: 123456 (ในเวอร์ชันจริงจะส่ง SMS จริง)`);
-  }
-
-  async function handleOtpVerify() {
-    if (!otpReqId) return;
-    const code = otpCode.trim();
-    
-    // Demo mode - simulate OTP verification
-    if (code === "123456") {
-      setOtpVerified(true);
-      alert("✅ ระบบจำลอง: OTP ถูกต้อง! ยืนยันตัวตนสำเร็จแล้ว (ในเวอร์ชันจริงจะเชื่อมต่อกับ AIS OTP API)");
-    } else {
-      setOtpVerified(false);
-      alert("❌ ระบบจำลอง: OTP ไม่ถูกต้อง กรุณาลองใหม่ (รหัสที่ถูกต้องคือ 123456)");
-    }
-  }
-
   function handleTranscriptionComplete(text: string, emotion?: string) {
     setTranscriptionText(text);
     setDetectedEmotion(emotion || '');
@@ -194,303 +171,57 @@ export default function HomePage() {
     switch (activeTab) {
       case 'chat':
         return (
-          <div className="space-y-8 animate-slide-up">
-            {/* Chat Header */}
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-[#00A651] to-[#0066CC] rounded-full mb-4">
-                <span className="text-2xl">💬</span>
-              </div>
-                             <h2 className="text-3xl font-bold text-[#1A1A1A] mb-2 font-anuphan">แชทกับ AI</h2>
-               <p className="text-[#666] text-lg font-anuphan-medium">สนทนากับ AI Call Center แบบเรียลไทม์</p>
-            </div>
-
-            <div className="h-[60vh] overflow-y-auto rounded-3xl p-8 bg-gradient-to-br from-white/95 to-white/80 backdrop-blur-md border border-white/40 shadow-2xl">
-                             {messages.length === 0 ? (
-                 <div className="text-center py-16">
-                   <h3 className="text-2xl font-bold text-[#1A1A1A] mb-2 font-anuphan">ยินดีต้อนรับสู่ AI Call Center</h3>
-                   <p className="text-[#666] text-lg font-anuphan-medium">เริ่มต้นการสนทนาด้วยการพิมพ์ข้อความด้านล่าง</p>
-                 </div>
-               ) : (
-                <>
-                  {messages.map((m, idx) => (
-                    <div key={idx} className="animate-fade-in" style={{animationDelay: `${idx * 0.1}s`}}>
-                      <ChatMessage role={m.role} text={m.text} audioUrl={m.audioUrl} autoPlay={!loading && m.role === "ai"} />
-                    </div>
-                  ))}
-                  <SuggestionButtons suggestions={suggestions} onChoose={(t) => setInput(t)} />
-                </>
-              )}
-
-              {candidates?.length ? (
-                <div className="mt-8 animate-scale-in">
-                                   <h3 className="text-xl font-bold text-[#1A1A1A] mb-6 flex items-center gap-3">
-                   <span className="text-gradient">คำตอบแนะนำ</span>
-                 </h3>
-                  <div className="grid grid-cols-1 gap-6">
-                    {candidates.map((c, i) => (
-                      <div key={`cand-${i}`} className="card-jump card-jump-primary p-6 hover-lift animate-fade-in" style={{animationDelay: `${i * 0.1}s`}}>
-                        <p className="text-[#1A1A1A] whitespace-pre-wrap text-base mb-4 leading-relaxed">{c}</p>
-                        <div className="flex gap-4">
-                          <button className="btn-jump-outline text-sm px-6 py-3" onClick={() => setInput(c)} type="button">
-                            ✨ ใช้ข้อความนี้
-                          </button>
-                          <button className="btn-jump-secondary text-sm px-6 py-3" onClick={() => handleSpeak(c)} type="button">
-                            🔊 พูดข้อความนี้
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {kb?.length ? (
-                <div className="mt-8 animate-scale-in">
-                                   <h3 className="text-xl font-bold text-[#1A1A1A] mb-6 flex items-center gap-3">
-                   <span className="text-gradient">ความรู้ที่เกี่ยวข้อง</span>
-                 </h3>
-                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {kb.map((k, i) => (
-                      <li key={`kb-${i}`} className="card-jump card-jump-secondary p-6 hover-lift animate-fade-in" style={{animationDelay: `${i * 0.1}s`}}>
-                        <p className="text-[#1A1A1A] text-base font-semibold mb-3">{k.title}</p>
-                        <p className="text-[#666] text-sm leading-relaxed">{k.snippet}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </div>
-
-            {/* Enhanced Input Section */}
-            <div className="bg-gradient-to-r from-[#00A651]/5 to-[#0066CC]/5 rounded-3xl p-6 border border-white/30">
-              <div className="flex flex-col lg:flex-row items-stretch gap-4">
-                <div className="flex-1 relative">
-                  <input
-                    className="input-jump w-full text-lg py-4 pl-12"
-                    placeholder="พิมพ์ข้อความที่นี่..."
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                  />
-                                                       <div className="absolute inset-y-0 left-4 flex items-center">
-                    <span className="text-[#1A1A1A] text-xl">✍</span>
-                  </div>
-                </div>
-                <div className="flex gap-3">
-                                     <button
-                     className="disabled:opacity-50 disabled:cursor-not-allowed text-lg px-8 py-4 text-white font-medium rounded-xl transition-all duration-500 shadow-2xl hover:shadow-[0_0_50px_rgba(186,218,85,0.4)] transform hover:-translate-y-2 hover:scale-110"
-                     style={{
-                       background: 'linear-gradient(135deg, rgb(156, 191, 27) 0%, rgb(136, 171, 7) 100%)',
-                       boxShadow: '0 0 30px rgba(186, 218, 85, 0.24), 0 8px 32px rgba(186, 218, 85, 0.24)',
-                       filter: 'drop-shadow(0 0 20px rgba(186, 218, 85, 0.24))'
-                     }}
-                     disabled={!canSend}
-                     onClick={handleSend}
-                   >
-                                         {loading ? (
-                       <div className="flex items-center gap-2">
-                         <div className="spinner-jump"></div>
-                         <span>กำลังส่ง...</span>
-                       </div>
-                     ) : (
-                       "ส่งข้อความ"
-                     )}
-                  </button>
-                                     <button
-                     className="btn-jump-accent text-lg px-6 py-4"
-                     onClick={() => setShowHitl(true)}
-                     type="button"
-                   >
-                     แก้ไข
-                   </button>
-                   <button
-                     className="btn-jump-secondary text-lg px-6 py-4"
-                     onClick={() => handleSpeak(input)}
-                     type="button"
-                   >
-                     พูด
-                   </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ChatTab
+            messages={messages}
+            loading={loading}
+            suggestions={suggestions}
+            candidates={candidates}
+            kb={kb}
+            input={input}
+            setInput={setInput}
+            handleSend={handleSend}
+            handleSpeak={handleSpeak}
+            setShowHitl={setShowHitl}
+          />
         );
 
       case 'speech':
         return (
-          <div className="space-y-8 animate-slide-up">
-            {/* Speech Header */}
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-[#0066CC] to-[#00A651] rounded-full mb-6">
-                <span className="text-3xl">🎤</span>
-              </div>
-                             <h2 className="text-4xl font-bold text-[#1A1A1A] mb-3 font-anuphan">แปลงเสียงเป็นข้อความ</h2>
-               <p className="text-[#666] text-xl max-w-2xl mx-auto leading-relaxed font-anuphan-medium">
-                 บันทึกเสียงพูดของคุณและแปลงเป็นข้อความด้วย AI พร้อมการตรวจจับอารมณ์แบบเรียลไทม์
-               </p>
-            </div>
-
-                        <div className="card-jump card-jump-primary p-10 animate-scale-in">
-              <div className="text-center mb-8">
-                <h3 className="text-2xl font-bold text-[#1A1A1A] mb-3">เริ่มต้นการบันทึกเสียง</h3>
-                <p className="text-[#666] text-lg">คลิกปุ่มด้านล่างเพื่อเริ่มบันทึกเสียงของคุณ หรือทดสอบระบบด้วยข้อมูลจำลอง</p>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-                <SpeechToText onTranscriptionComplete={handleTranscriptionComplete} />
-                <button
-                  onClick={handleDemoSpeechTranscription}
-                  className="btn-jump-accent text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
-                >
-                  🎯 ทดสอบด้วยข้อมูลจำลอง
-                </button>
-              </div>
-            </div>
-
-            {transcriptionText && (
-              <div className="card-jump card-jump-secondary p-10 animate-fade-in">
-                                 <div className="text-center mb-8">
-                   <h3 className="text-3xl font-bold text-[#1A1A1A] mb-3">ผลลัพธ์การแปลงเสียง</h3>
-                   <p className="text-[#666] text-lg">AI ได้แปลงเสียงของคุณเป็นข้อความแล้ว</p>
-                 </div>
-                
-                <div className="space-y-6 max-w-3xl mx-auto">
-                                     <div className="bg-gradient-to-r from-white/90 to-white/80 p-8 rounded-2xl border border-[#0066CC]/30 shadow-lg">
-                     <div className="flex items-center gap-3 mb-4">
-                       <h4 className="text-xl font-semibold text-[#1A1A1A]">ข้อความที่แปลงได้</h4>
-                     </div>
-                     <p className="text-[#1A1A1A] text-xl leading-relaxed">{transcriptionText}</p>
-                   </div>
-                  
-                  {detectedEmotion && (
-                                         <div className="bg-gradient-to-r from-white/90 to-white/80 p-6 rounded-2xl border border-[#0066CC]/30 shadow-lg">
-                       <div className="flex items-center gap-3 mb-3">
-                         <h4 className="text-lg font-semibold text-[#1A1A1A]">อารมณ์ที่ตรวจพบ</h4>
-                       </div>
-                       <div className="inline-flex items-center gap-2 bg-gradient-to-r from-[#0066CC]/20 to-[#00A651]/20 px-4 py-2 rounded-full border border-[#0066CC]/30">
-                         <span className="text-[#1A1A1A] font-semibold">{detectedEmotion}</span>
-                       </div>
-                     </div>
-                  )}
-                  
-                  <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                                                              <button
-                       onClick={() => setActiveTab('chat')}
-                       className="text-lg px-8 py-4 text-white font-medium rounded-xl transition-all duration-500 shadow-2xl hover:shadow-[0_0_50px_rgba(186,218,85,0.4)] transform hover:-translate-y-2 hover:scale-110"
-                       style={{
-                         background: 'linear-gradient(135deg, rgb(156, 191, 27) 0%, rgb(136, 171, 7) 100%)',
-                         boxShadow: '0 0 30px rgba(186, 218, 85, 0.24), 0 8px 32px rgba(186, 218, 85, 0.24)',
-                         filter: 'drop-shadow(0 0 20px rgba(186, 218, 85, 0.24))'
-                       }}
-                     >
-                        ใช้ข้อความนี้ในการแชท
-                      </button>
-                     <button
-                       onClick={() => handleSpeak(transcriptionText)}
-                       className="btn-jump-secondary text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
-                     >
-                       ฟังเสียงที่แปลงได้
-                     </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <SpeechTab
+            transcriptionText={transcriptionText}
+            detectedEmotion={detectedEmotion}
+            handleTranscriptionComplete={handleTranscriptionComplete}
+            handleDemoSpeechTranscription={handleDemoSpeechTranscription}
+            setActiveTab={setActiveTab}
+            handleSpeak={handleSpeak}
+          />
         );
 
       case 'call':
-        return (
-          <div className="space-y-8 animate-slide-up">
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-[#00A651] to-[#0066CC] rounded-full mb-6">
-                <span className="text-3xl">📞</span>
-              </div>
-              <h2 className="text-4xl font-bold text-[#1A1A1A] mb-3 font-anuphan">การสนทนาสองทาง</h2>
-              <p className="text-[#666] text-xl max-w-2xl mx-auto leading-relaxed font-anuphan-medium">
-                ทดสอบการสนทนากับ AI Call Center แบบสองทาง พร้อมการแปลงเสียงและตรวจจับอารมณ์
-              </p>
-            </div>
-
-            <div className="card-jump card-jump-primary p-10 animate-scale-in">
-              <div className="text-center mb-8">
-                <h3 className="text-2xl font-bold text-[#1A1A1A] mb-3">ระบบสนทนาสองทาง</h3>
-                <p className="text-[#666] text-lg">ทดสอบการสนทนากับ AI แบบสองทาง พร้อมการแปลงเสียงและตรวจจับอารมณ์</p>
-              </div>
-              
-              <div className="space-y-6">
-                <div className="bg-gradient-to-r from-white/90 to-white/80 p-6 rounded-2xl border border-[#00A651]/30 shadow-lg">
-                  <h4 className="text-xl font-semibold text-[#1A1A1A] mb-4">สถานะการเชื่อมต่อ</h4>
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-3 h-3 bg-[#00A651] rounded-full animate-pulse"></div>
-                    <span className="text-[#1A1A1A] font-medium">พร้อมใช้งาน</span>
-                  </div>
-                  <p className="text-[#666] text-sm">ระบบพร้อมสำหรับการสนทนาสองทางกับ AI</p>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                  <button
-                    onClick={() => alert("🎯 ระบบจำลอง: เริ่มการสนทนาสองทาง\nในเวอร์ชันจริงจะมีการเชื่อมต่อกับ AI Call Center จริง")}
-                    className="btn-jump-primary text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
-                  >
-                    📞 เริ่มการสนทนา
-                  </button>
-                  <button
-                    onClick={() => alert("🎯 ระบบจำลอง: หยุดการสนทนา\nในเวอร์ชันจริงจะมีการปิดการเชื่อมต่อกับ AI Call Center")}
-                    className="btn-jump-secondary text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300"
-                  >
-                    ⏹️ หยุดการสนทนา
-                  </button>
-                </div>
-
-                <div className="bg-gradient-to-r from-[#00A651]/10 to-[#0066CC]/10 rounded-2xl p-6 border border-[#00A651]/20">
-                  <p className="text-sm text-[#666] text-center">
-                    <strong>หมายเหตุ:</strong> ระบบนี้เป็นเดโม่สำหรับการทดสอบ UI และ UX — ในเวอร์ชันจริงจะมีการเชื่อมต่อกับ AI Call Center จริง
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
+        return <CallTab />;
 
       case 'enhanced':
         return (
-          <div className="space-y-6">
-            <div className="card-jump card-jump-secondary p-8">
-              <h2 className="text-2xl font-bold text-[#1A1A1A] mb-6 flex items-center gap-3">
-                <span className="text-[#0066CC] text-3xl">🚀</span>
-                แชทขั้นสูง
-              </h2>
-              <p className="text-[#666] mb-6">แชทที่มีการตรวจจับอารมณ์และตอบสนองตามบริบท</p>
-              
-              <div className="h-[60vh] overflow-y-auto rounded-2xl p-6 bg-white/80 backdrop-blur-sm border border-[#0066CC]/20 shadow-lg">
-                {messages.map((m, idx) => (
-                  <ChatMessage key={idx} role={m.role} text={m.text} audioUrl={m.audioUrl} autoPlay={!loading && m.role === "ai"} />
-                ))}
-              </div>
-
-              <div className="flex items-center gap-3 mt-6">
-                <input
-                  className="input-jump flex-1"
-                  placeholder="พิมพ์ข้อความที่นี่ (จะมีการตรวจจับอารมณ์)"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                />
-                <button
-                  className="btn-jump-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={!input.trim() || loading}
-                  onClick={handleEnhancedChat}
-                >
-                  {loading ? (
-                    <div className="flex items-center gap-2">
-                      <div className="spinner-jump"></div>
-                      <span>กำลังประมวลผล...</span>
-                    </div>
-                  ) : (
-                    "ส่งข้อความขั้นสูง"
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
+          <EnhancedTab
+            messages={messages}
+            loading={loading}
+            input={input}
+            setInput={setInput}
+            handleEnhancedChat={handleEnhancedChat}
+          />
         );
+
+      case 'supervisor':
+        return <SupervisorTab />;
+
+      case 'collaborative':
+        return <CollaborativeTab />;
+
+      case 'crm':
+        return <CRMTab />;
+
+      case 'rag':
+        return <RAGTab />;
 
       default:
         return null;
@@ -529,6 +260,16 @@ export default function HomePage() {
               <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm rounded-full px-6 py-2 mb-8 border border-white/30">
                 <span className="w-2 h-2 bg-[#FFD700] rounded-full animate-pulse"></span>
                 <span className="text-sm font-medium text-[#1A1A1A]">AI Innovation Platform - DEMO MODE</span>
+              </div>
+              
+              {/* Accessibility Focus */}
+              <div className="bg-gradient-to-r from-[#00A651]/20 to-[#0066CC]/20 rounded-2xl p-4 mb-6 border border-[#00A651]/30">
+                <div className="text-center">
+                  <h3 className="text-lg font-semibold text-[#1A1A1A] mb-2">🎯 ระบบออกแบบเพื่อผู้พิการ</h3>
+                  <p className="text-[#1A1A1A] text-sm">
+                    <strong>ผู้พิการทางการได้ยิน</strong> • <strong>ผู้พิการทางการสื่อสาร</strong> • <strong>ผู้พิการทางสติปัญญา</strong>
+                  </p>
+                </div>
               </div>
               
               <h1 className="text-5xl lg:text-6xl xl:text-7xl font-bold mb-6 leading-tight font-anuphan">
@@ -626,13 +367,91 @@ export default function HomePage() {
              <div className="text-center mb-6">
                <h2 className="text-3xl font-bold text-[#1A1A1A] mb-2 font-anuphan">บริการหลักของเรา</h2>
                <p className="text-[#666] text-lg font-anuphan-medium">เลือกบริการที่ต้องการใช้งาน</p>
+               
+               {/* Accessibility Guide */}
+               <div className="bg-gradient-to-r from-[#FFD700]/20 to-[#00A651]/20 rounded-xl p-4 mt-4 border border-[#FFD700]/30">
+                 <h4 className="text-sm font-semibold text-[#1A1A1A] mb-2">🎯 ระบบออกแบบเพื่อผู้พิการแต่ละกลุ่ม</h4>
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                   <div className="text-[#00A651] font-medium">👂 ผู้พิการทางการได้ยิน</div>
+                   <div className="text-[#0066CC] font-medium">💬 ผู้พิการทางการสื่อสาร</div>
+                   <div className="text-[#FFD700] font-medium">🧠 ผู้พิการทางสติปัญญา</div>
+                 </div>
+               </div>
              </div>
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                {[
-                 { id: 'chat', label: 'แชทพื้นฐาน', icon: '💬', color: 'from-[#00A651] to-[#00A651]', desc: 'แชทพื้นฐานกับ AI' },
-                 { id: 'speech', label: 'แปลงเสียง', icon: '🎤', color: 'from-[#0066CC] to-[#0066CC]', desc: 'แปลงเสียงเป็นข้อความ' },
-                 { id: 'call', label: 'สนทนาสองทาง', icon: '📞', color: 'from-[#00A651] to-[#0066CC]', desc: 'สนทนากับ AI แบบสองทาง' },
-                 { id: 'enhanced', label: 'แชทขั้นสูง', icon: '🚀', color: 'from-[#0066CC] to-[#00A651]', desc: 'แชทขั้นสูงพร้อมตรวจจับอารมณ์' }
+                 { 
+                   id: 'chat', 
+                   label: 'แชทพื้นฐาน', 
+                   icon: '💬', 
+                   color: 'from-[#00A651] to-[#00A651]', 
+                   desc: 'พิมพ์ข้อความโต้ตอบกับ AI',
+                   benefit: 'เหมาะสำหรับผู้พิการทางการได้ยิน',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร'
+                 },
+                 { 
+                   id: 'speech', 
+                   label: 'แปลงเสียง', 
+                   icon: '🎤', 
+                   color: 'from-[#0066CC] to-[#0066CC]', 
+                   desc: 'แปลงเสียงพูดเป็นข้อความ',
+                   benefit: 'ช่วยผู้พิการทางการได้ยินเข้าใจลูกค้า',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร'
+                 },
+                 { 
+                   id: 'call', 
+                   label: 'สนทนาสองทาง', 
+                   icon: '📞', 
+                   color: 'from-[#00A651] to-[#0066CC]', 
+                   desc: 'สนทนากับ AI แบบสองทาง',
+                   benefit: 'รองรับการสื่อสารแบบครบวงจร',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร • 🧠 ผู้พิการทางสติปัญญา'
+                 },
+                 { 
+                   id: 'enhanced', 
+                   label: 'แชทขั้นสูง', 
+                   icon: '🚀', 
+                   color: 'from-[#0066CC] to-[#00A651]', 
+                   desc: 'ตรวจจับอารมณ์และแนะนำคำตอบ',
+                   benefit: 'ช่วยผู้พิการทางสติปัญญา',
+                   accessibility: '🧠 ผู้พิการทางสติปัญญา • 👂 ผู้พิการทางการได้ยิน'
+                 },
+                 { 
+                   id: 'supervisor', 
+                   label: 'AI Supervisor', 
+                   icon: '👨‍💼', 
+                   color: 'from-[#FFD700] to-[#FF6B35]', 
+                   desc: 'ควบคุมและดูแล AI Call Center',
+                   benefit: 'คนพิการเป็นผู้ควบคุม AI แทนการเป็นพนักงาน',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร • 🧠 ผู้พิการทางสติปัญญา'
+                 },
+                 { 
+                   id: 'collaborative', 
+                   label: 'Collaborative Training', 
+                   icon: '🤝', 
+                   color: 'from-[#9C27B0] to-[#E91E63]', 
+                   desc: 'เทรน AI ร่วมกันระหว่าง AIS กับผู้พิการ',
+                   benefit: 'พนักงาน AIS และผู้พิการเทรน AI ร่วมกัน',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร • 🧠 ผู้พิการทางสติปัญญา'
+                 },
+                 { 
+                   id: 'crm', 
+                   label: 'CRM System', 
+                   icon: '📊', 
+                   color: 'from-[#FF6B6B] to-[#4ECDC4]', 
+                   desc: 'ระบบจัดการลูกค้าแบบครบวงจร',
+                   benefit: 'จัดการข้อมูลลูกค้าและความต้องการพิเศษ',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร • 🧠 ผู้พิการทางสติปัญญา'
+                 },
+                 { 
+                   id: 'rag', 
+                   label: 'RAG System', 
+                   icon: '🧠', 
+                   color: 'from-[#6C5CE7] to-[#A29BFE]', 
+                   desc: 'ระบบค้นหาความรู้แบบอัจฉริยะ',
+                   benefit: 'ตอบคำถามด้วยความรู้จากฐานข้อมูล',
+                   accessibility: '👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร • 🧠 ผู้พิการทางสติปัญญา'
+                 }
                ].map((tab) => (
                  <button
                    key={tab.id}
@@ -657,6 +476,12 @@ export default function HomePage() {
                        <span className={`text-xs opacity-75 mt-1 block ${activeTab === tab.id ? 'text-[#1A1A1A]' : 'text-[#666]'}`}>
                          {tab.desc}
                        </span>
+                       <span className={`text-xs opacity-60 mt-1 block ${activeTab === tab.id ? 'text-[#1A1A1A]/80' : 'text-[#666]/80]'}`}>
+                         {tab.benefit}
+                       </span>
+                       <span className={`text-xs opacity-50 mt-1 block ${activeTab === tab.id ? 'text-[#1A1A1A]/60' : 'text-[#666]/60]'}`}>
+                         {tab.accessibility}
+                       </span>
                      </div>
                    </div>
                  </button>
@@ -679,84 +504,7 @@ export default function HomePage() {
            </div>
          </div>
 
-                 {/* Enhanced OTP Section with Hero Theme */}
-         <div className="relative mb-16">
-           <div className="absolute inset-0 bg-gradient-to-r from-[#00A651]/10 to-[#0066CC]/10 rounded-3xl blur-3xl"></div>
-           <div className="relative bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl border border-white/40 overflow-hidden">
-             <div className="bg-gradient-to-r from-[#00A651]/10 to-[#0066CC]/10 p-8 border-b border-white/30">
-               <div className="text-center">
-                 <div className="inline-flex items-center justify-center w-24 h-24 bg-gradient-to-br from-[#00A651] to-[#0066CC] rounded-full mb-6 shadow-xl">
-                   <span className="text-4xl">🔐</span>
-                 </div>
-                 <h3 className="text-3xl font-bold text-[#1A1A1A] mb-3 font-anuphan">ยืนยันตัวตน (OTP Demo)</h3>
-                 <p className="text-[#666] text-lg font-anuphan-medium">ระบบยืนยันตัวตนด้วยรหัส OTP แบบปลอดภัย - โหมดเดโม</p>
-               </div>
-             </div>
-             <div className="p-10">
-               <div className="space-y-6 max-w-2xl mx-auto">
-              <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4">
-                <div className="flex-1 relative">
-                  <input 
-                    className="input-jump w-full text-center text-lg py-4" 
-                    placeholder="เบอร์โทรศัพท์" 
-                    value={otpPhone} 
-                    onChange={(e) => setOtpPhone(e.target.value)} 
-                  />
-                  <div className="absolute inset-y-0 left-4 flex items-center">
-                    <span className="text-[#1A1A1A] text-xl">📱</span>
-                  </div>
-                </div>
-                                 <button 
-                   className="text-lg px-8 py-4 text-white font-medium rounded-xl transition-all duration-500 shadow-2xl hover:shadow-[0_0_50px_rgba(186,218,85,0.4)] transform hover:-translate-y-2 hover:scale-110" 
-                   style={{
-                     background: 'linear-gradient(135deg, rgb(156, 191, 27) 0%, rgb(136, 171, 7) 100%)',
-                     boxShadow: '0 0 30px rgba(186, 218, 85, 0.24), 0 8px 32px rgba(186, 218, 85, 0.24)',
-                     filter: 'drop-shadow(0 0 20px rgba(186, 218, 85, 0.24))'
-                   }}
-                   onClick={handleOtpSend}
-                   type="button"
-                 >
-                   ส่ง OTP
-                 </button>
-              </div>
-              
-              {otpReqId ? (
-                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4">
-                  <div className="flex-1 relative">
-                    <input 
-                      className="input-jump w-full text-center text-lg py-4" 
-                      placeholder="รหัส 6 หลัก" 
-                      value={otpCode} 
-                      onChange={(e) => setOtpCode(e.target.value)} 
-                    />
-                    <div className="absolute inset-y-0 left-4 flex items-center">
-                      <span className="text-[#1A1A1A] text-xl">🔢</span>
-                    </div>
-                  </div>
-                  <button 
-                    className="btn-jump-secondary text-lg px-8 py-4 transform hover:scale-105 transition-all duration-300" 
-                    onClick={handleOtpVerify}
-                    type="button"
-                  >
-                    ยืนยัน
-                  </button>
-                                     {otpVerified ? (
-                     <div className="badge-jump badge-jump-primary text-lg px-6 py-3 text-[#1A1A1A]">
-                       ยืนยันแล้ว
-                     </div>
-                   ) : null}
-                </div>
-              ) : null}
-              
-              <div className="bg-gradient-to-r from-[#00A651]/10 to-[#0066CC]/10 rounded-2xl p-6 border border-[#00A651]/20">
-                               <p className="text-sm text-[#666] text-center">
-                 <strong>หมายเหตุ:</strong> เดโม่นี้แสดงรหัส OTP ในฝั่งเซิร์ฟเวอร์ log (mock) — เปลี่ยนเป็น AIS OTP ได้ทันทีเมื่อมี credentials
-               </p>
-              </div>
-               </div>
-             </div>
-           </div>
-         </div>
+
 
         {/* Enhanced Footer */}
         <div className="mt-20 relative">
@@ -772,6 +520,68 @@ export default function HomePage() {
               <p className="text-xl text-[#666] mb-8 max-w-3xl mx-auto leading-relaxed">
                 ขับเคลื่อนอนาคตด้วยนวัตกรรมในยุคปัญญาประดิษฐ์ เพื่อเพิ่มศักยภาพให้กับผู้สูงอายุ หรือ คนพิการ
               </p>
+              
+              {/* Complete Feature Overview */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
+                <div className="bg-gradient-to-br from-[#00A651]/10 to-[#00A651]/5 rounded-2xl p-6 border border-[#00A651]/20">
+                  <h5 className="text-lg font-semibold text-[#1A1A1A] mb-3">💬 Text-Based System</h5>
+                  <p className="text-[#666] text-sm mb-2">พิมพ์ข้อความโต้ตอบกับ AI</p>
+                  <p className="text-[#00A651] text-xs font-medium">เหมาะสำหรับผู้พิการทางการได้ยิน</p>
+                  <div className="mt-2 text-xs text-[#666]">👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร</div>
+                </div>
+                <div className="bg-gradient-to-br from-[#0066CC]/10 to-[#0066CC]/5 rounded-2xl p-6 border border-[#0066CC]/20">
+                  <h5 className="text-lg font-semibold text-[#1A1A1A] mb-3">🎤 Speech-to-Text</h5>
+                  <p className="text-[#666] text-sm mb-2">แปลงเสียงลูกค้าเป็นข้อความ</p>
+                  <p className="text-[#00A651] text-xs font-medium">ช่วยผู้พิการทางการได้ยินเข้าใจลูกค้า</p>
+                  <div className="mt-2 text-xs text-[#666]">👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร</div>
+                </div>
+                <div className="bg-gradient-to-br from-[#FFD700]/10 to-[#FFD700]/5 rounded-2xl p-6 border border-[#FFD700]/20">
+                  <h5 className="text-lg font-semibold text-[#1A1A1A] mb-3">🎵 Text-to-Speech</h5>
+                  <p className="text-[#666] text-sm mb-2">แปลงข้อความเป็นเสียง</p>
+                  <p className="text-[#00A651] text-xs font-medium">ช่วยผู้พิการทางการได้ยินโต้ตอบกับลูกค้า</p>
+                  <div className="mt-2 text-xs text-[#666]">👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร</div>
+                </div>
+                <div className="bg-gradient-to-br from-[#00A651]/10 to-[#00A651]/5 rounded-2xl p-6 border border-[#00A651]/20">
+                  <h5 className="text-lg font-semibold text-[#1A1A1A] mb-3">🤖 AI Suggestion</h5>
+                  <p className="text-[#666] text-sm mb-2">AI แนะนำคำตอบที่เหมาะสม</p>
+                  <p className="text-[#00A651] text-xs font-medium">ช่วยผู้พิการทางสติปัญญาที่มีปัญหาเรื่องความจำ</p>
+                  <div className="mt-2 text-xs text-[#666]">🧠 ผู้พิการทางสติปัญญา • 👂 ผู้พิการทางการได้ยิน</div>
+                </div>
+                <div className="bg-gradient-to-br from-[#0066CC]/10 to-[#0066CC]/5 rounded-2xl p-6 border border-[#0066CC]/20">
+                  <h5 className="text-lg font-semibold text-[#1A1A1A] mb-3">📚 Knowledge Management</h5>
+                  <p className="text-[#666] text-sm mb-2">คลังความรู้และข้อมูลที่เกี่ยวข้อง</p>
+                  <p className="text-[#00A651] text-xs font-medium">ช่วยผู้พิการทางสติปัญญาเข้าถึงข้อมูลได้รวดเร็ว</p>
+                  <div className="mt-2 text-xs text-[#666]">🧠 ผู้พิการทางสติปัญญา • 👂 ผู้พิการทางการได้ยิน</div>
+                </div>
+                <div className="bg-gradient-to-br from-[#FFD700]/10 to-[#FFD700]/5 rounded-2xl p-6 border border-[#FFD700]/20">
+                  <h5 className="text-lg font-semibold text-[#1A1A1A] mb-3">😊 Emotional Detection</h5>
+                  <p className="text-[#666] text-sm mb-2">ตรวจจับอารมณ์จากเสียงและข้อความ</p>
+                  <p className="text-[#00A651] text-xs font-medium">เหมาะสำหรับผู้พิการทุกกลุ่ม</p>
+                  <div className="mt-2 text-xs text-[#666]">👂 ผู้พิการทางการได้ยิน • 💬 ผู้พิการทางการสื่อสาร • 🧠 ผู้พิการทางสติปัญญา</div>
+                </div>
+              </div>
+              
+              {/* Accessibility Summary */}
+              <div className="bg-gradient-to-r from-[#00A651]/10 to-[#0066CC]/10 rounded-2xl p-6 border border-[#00A651]/30 mb-8">
+                <h4 className="text-lg font-semibold text-[#1A1A1A] mb-4 text-center">🎯 ระบบออกแบบเพื่อผู้พิการแต่ละกลุ่ม</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="text-center">
+                    <div className="text-3xl mb-2">👂</div>
+                    <h5 className="font-semibold text-[#1A1A1A] mb-2">ผู้พิการทางการได้ยิน</h5>
+                    <p className="text-[#666] text-sm">ใช้การพิมพ์และแปลงข้อความเป็นเสียง เพื่อการสื่อสารที่ราบรื่น</p>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl mb-2">💬</div>
+                    <h5 className="font-semibold text-[#1A1A1A] mb-2">ผู้พิการทางการสื่อสาร</h5>
+                    <p className="text-[#666] text-sm">ใช้การพิมพ์และ AI แนะนำ เพื่อการตอบสนองที่เหมาะสม</p>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl mb-2">🧠</div>
+                    <h5 className="font-semibold text-[#1A1A1A] mb-2">ผู้พิการทางสติปัญญา</h5>
+                    <p className="text-[#666] text-sm">ใช้ AI แนะนำและจัดการความรู้ เพื่อการเข้าถึงข้อมูลที่ง่าย</p>
+                  </div>
+                </div>
+              </div>
               
                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
                  <div className="bg-gradient-to-br from-[#00A651]/10 to-[#00A651]/5 rounded-2xl p-6 border border-[#00A651]/20">
