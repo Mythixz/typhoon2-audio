@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "name": "accessibility-first-call-center-poc",
+  "name": "frontend",
   "builds": [
     {
       "src": "package.json",
