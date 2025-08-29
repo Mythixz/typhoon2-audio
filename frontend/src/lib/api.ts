@@ -1,6 +1,5 @@
 export type ChatResponse = {
-  ai_response: string;
-  suggestions: string[];
+  text: string;
   tts_audio_url: string;
   candidates?: string[];
   kb?: { title: string; snippet: string }[];
@@ -27,13 +26,105 @@ export type AudioUploadResponse = {
   message: string;
 };
 
+// เพิ่ม CRM System
+export type CRMContact = {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  company?: string;
+  lastContact: Date;
+  callHistory: CallRecord[];
+  preferences: CustomerPreferences;
+  status: 'active' | 'inactive' | 'vip';
+};
+
+export type CallRecord = {
+  id: string;
+  timestamp: Date;
+  duration: number;
+  type: 'incoming' | 'outgoing';
+  summary: string;
+  emotion: string;
+  satisfaction: number;
+  agentId: string;
+};
+
+export type CustomerPreferences = {
+  language: 'th' | 'en';
+  communicationMethod: 'voice' | 'text' | 'both';
+  preferredTime: string;
+  specialNeeds: string[];
+};
+
+// เพิ่ม RAG System
+export type KnowledgeItem = {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  lastUpdated: Date;
+  confidence: number;
+  source: string;
+};
+
+export type RAGResponse = {
+  answer: string;
+  sources: KnowledgeItem[];
+  confidence: number;
+  suggestedQuestions: string[];
+};
+
+// เพิ่ม AI Training System
+export type TrainingFeedback = {
+  id: string;
+  query: string;
+  aiResponse: string;
+  humanCorrection: string;
+  reason: string;
+  timestamp: Date;
+  agentId: string;
+  category: string;
+};
+
+export type PerformanceMetrics = {
+  accuracy: number;
+  responseTime: number;
+  customerSatisfaction: number;
+  callResolutionRate: number;
+  knowledgeCoverage: number;
+};
+
+// เพิ่ม Voice Generation System
+export type VoiceProfile = {
+  id: string;
+  name: string;
+  gender: 'male' | 'female';
+  age: number;
+  accent: string;
+  emotion: string;
+  speed: number;
+  pitch: number;
+};
+
+export type VoiceParameters = {
+  profileId: string;
+  customizations: {
+    speed?: number;
+    pitch?: number;
+    emotion?: string;
+    emphasis?: string[];
+  };
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-export async function postChat(userMessage: string): Promise<ChatResponse> {
+export async function postChat(message: string): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_message: userMessage }),
+    body: JSON.stringify({ user_message: message }),
   });
   if (!res.ok) {
     throw new Error(`Chat request failed: ${res.status}`);
@@ -45,11 +136,11 @@ export async function postChat(userMessage: string): Promise<ChatResponse> {
   return data;
 }
 
-export async function postEnhancedChat(userMessage: string): Promise<ChatResponse> {
+export async function postEnhancedChat(message: string): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat/enhanced`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_message: userMessage }),
+    body: JSON.stringify({ user_message: message }),
   });
   if (!res.ok) {
     throw new Error(`Enhanced chat request failed: ${res.status}`);
@@ -61,11 +152,11 @@ export async function postEnhancedChat(userMessage: string): Promise<ChatRespons
   return data;
 }
 
-export async function postFeedback(original_message: string, corrected_message: string): Promise<{ status: string; message: string }>{
+export async function postFeedback(original: string, corrected: string): Promise<void> {
   const res = await fetch(`${API_BASE}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ original_message, corrected_message }),
+    body: JSON.stringify({ original_message: original, corrected_message: corrected }),
   });
   if (!res.ok) {
     throw new Error(`Feedback request failed: ${res.status}`);
@@ -73,7 +164,7 @@ export async function postFeedback(original_message: string, corrected_message: 
   return res.json();
 }
 
-export async function postSpeak(text: string): Promise<{ tts_audio_url: string }>{
+export async function postSpeak(text: string): Promise<void> {
   const res = await fetch(`${API_BASE}/speak`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -89,7 +180,7 @@ export async function postSpeak(text: string): Promise<{ tts_audio_url: string }
   return data;
 }
 
-export async function postOtpSend(phone: string): Promise<{ request_id: string }>{
+export async function postOtpSend(phone: string): Promise<{ requestId: string }> {
   const res = await fetch(`${API_BASE}/otp/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -99,11 +190,11 @@ export async function postOtpSend(phone: string): Promise<{ request_id: string }
   return res.json();
 }
 
-export async function postOtpVerify(request_id: string, code: string): Promise<{ verified: boolean }>{
+export async function postOtpVerify(requestId: string, code: string): Promise<{ verified: boolean }> {
   const res = await fetch(`${API_BASE}/otp/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request_id, code }),
+    body: JSON.stringify({ request_id: requestId, code }),
   });
   if (!res.ok) throw new Error(`OTP verify failed: ${res.status}`);
   return res.json();
@@ -165,4 +256,84 @@ export async function postAudioUpload(audioFile: File): Promise<AudioUploadRespo
     data.url = `${API_BASE}${data.url}`;
   }
   return data;
+} 
+
+// เพิ่ม CRM APIs
+export async function getCRMContacts(): Promise<CRMContact[]> {
+  const response = await fetch(`${API_BASE}/crm/contacts`);
+  return response.json();
+}
+
+export async function createCRMContact(contact: Omit<CRMContact, 'id' | 'lastContact' | 'callHistory'>): Promise<CRMContact> {
+  const response = await fetch(`${API_BASE}/crm/contacts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(contact),
+  });
+  return response.json();
+}
+
+export async function updateCRMContact(id: string, updates: Partial<CRMContact>): Promise<CRMContact> {
+  const response = await fetch(`${API_BASE}/crm/contacts/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  return response.json();
+}
+
+// เพิ่ม RAG APIs
+export async function searchKnowledge(query: string): Promise<KnowledgeItem[]> {
+  const response = await fetch(`${API_BASE}/rag/search?q=${encodeURIComponent(query)}`);
+  return response.json();
+}
+
+export async function generateRAGResponse(query: string, context?: string): Promise<RAGResponse> {
+  const response = await fetch(`${API_BASE}/rag/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, context }),
+  });
+  return response.json();
+}
+
+export async function addKnowledge(knowledge: Omit<KnowledgeItem, 'id' | 'lastUpdated'>): Promise<KnowledgeItem> {
+  const response = await fetch(`${API_BASE}/rag/knowledge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(knowledge),
+  });
+  return response.json();
+}
+
+// เพิ่ม AI Training APIs
+export async function submitTrainingFeedback(feedback: Omit<TrainingFeedback, 'id' | 'timestamp'>): Promise<void> {
+  await fetch(`${API_BASE}/ai/training/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(feedback),
+  });
+}
+
+export async function getPerformanceMetrics(): Promise<PerformanceMetrics> {
+  const response = await fetch(`${API_BASE}/ai/performance`);
+  return response.json();
+}
+
+// เพิ่ม Voice Generation APIs
+export async function generateVoice(text: string, profile: VoiceProfile): Promise<{ audioUrl: string }> {
+  const response = await fetch(`${API_BASE}/voice/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, profile }),
+  });
+  return response.json();
+}
+
+export async function customizeVoice(profileId: string, parameters: VoiceParameters['customizations']): Promise<void> {
+  await fetch(`${API_BASE}/voice/customize/${profileId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(parameters),
+  });
 } 
