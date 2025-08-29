@@ -1,13 +1,10 @@
 // @ts-ignore
 const nextConfig: any = {
   /* config options here */
-  // ตั้งค่าให้เหมาะกับ Vercel
-  trailingSlash: false,
+  // ใช้ static export สำหรับ Vercel
+  output: 'export',
+  trailingSlash: true,
   poweredByHeader: false,
-  
-  experimental: {
-    // ลบ turbo config ที่ deprecated
-  },
   
   images: {
     domains: ['localhost', 'your-backend-url.com'],
@@ -32,16 +29,6 @@ const nextConfig: any = {
   
   // ปิด telemetry
   telemetry: false,
-  
-  // เพิ่ม rewrites สำหรับ Vercel
-  async rewrites() {
-    return [
-      {
-        source: '/(.*)',
-        destination: '/',
-      },
-    ];
-  },
 };
 
 export default nextConfig; 
