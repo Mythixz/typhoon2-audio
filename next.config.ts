@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  output: 'standalone',
+  output: 'export',
+  trailingSlash: true,
   images: {
     domains: ['localhost', 'your-backend-url.com'],
     unoptimized: true,

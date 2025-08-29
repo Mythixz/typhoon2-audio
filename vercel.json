@@ -1,6 +1,12 @@
 {
   "version": 2,
   "name": "frontend",
+  "builds": [
+    {
+      "src": "public/**",
+      "use": "@vercel/static"
+    }
+  ],
   "env": {
     "NEXT_PUBLIC_APP_NAME": "Accessibility-First Call Center System - POC",
     "NEXT_PUBLIC_APP_VERSION": "POC v1.0",
