@@ -1,12 +1,6 @@
 {
   "version": 2,
   "name": "frontend",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
   "env": {
     "NEXT_PUBLIC_APP_NAME": "Accessibility-First Call Center System - POC",
     "NEXT_PUBLIC_APP_VERSION": "POC v1.0",
