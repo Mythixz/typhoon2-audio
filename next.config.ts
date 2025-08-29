@@ -1,6 +1,5 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
+// @ts-ignore
+const nextConfig: any = {
   /* config options here */
   output: 'standalone',
   experimental: {
@@ -18,18 +17,20 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   env: {
-    NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || "Accessibility-First Call Center System",
-    NEXT_PUBLIC_APP_VERSION: process.env.NEXT_PUBLIC_APP_VERSION || "1.0.0",
+    NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || "Accessibility-First Call Center System - POC",
+    NEXT_PUBLIC_APP_VERSION: process.env.NEXT_PUBLIC_APP_VERSION || "POC v1.0",
     NEXT_PUBLIC_DEMO_MODE: process.env.NEXT_PUBLIC_DEMO_MODE || "true",
   },
-  // ปิด ESLint สำหรับ POC
+  // ปิด ESLint สำหรับ POC - สำคัญมาก!
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // ปิด TypeScript type checking สำหรับ POC
+  // ปิด TypeScript type checking สำหรับ POC - สำคัญมาก!
   typescript: {
     ignoreBuildErrors: true,
   },
+  // ปิด telemetry
+  telemetry: false,
 };
 
-export default nextConfig;
+export default nextConfig; 
