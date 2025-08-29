@@ -78,7 +78,17 @@
   }
 
   .input-jump {
-    @apply border-2 border-gray-200 focus:border-[#00A651] focus:ring-2 focus:ring-[#00A651]/20 rounded-xl px-4 py-3 transition-all duration-300 bg-white/80 backdrop-blur-sm hover:border-[#00A651]/50 focus:scale-105;
+    @apply border-2 border-[#00A651] focus:border-[#00A651] focus:ring-2 focus:ring-[#00A651]/20 rounded-xl px-4 py-3 transition-all duration-300 bg-white backdrop-blur-sm hover:border-[#00A651] focus:scale-105 text-[#1A1A1A];
+  }
+
+  .input-jump::placeholder {
+    color: #666666;
+    opacity: 1;
+  }
+
+  .input-jump:focus::placeholder {
+    color: #999999;
+    opacity: 0.7;
   }
 
   .badge-jump {
