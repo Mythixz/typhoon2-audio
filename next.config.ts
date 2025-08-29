@@ -1,9 +1,8 @@
 // @ts-ignore
 const nextConfig: any = {
   /* config options here */
-  // ใช้ static export สำหรับ Vercel
-  output: 'export',
-  trailingSlash: true,
+  // ตั้งค่าพื้นฐานสำหรับ Vercel
+  trailingSlash: false,
   poweredByHeader: false,
   
   images: {

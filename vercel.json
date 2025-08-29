@@ -3,8 +3,8 @@
   "name": "accessibility-first-call-center-poc",
   "builds": [
     {
-      "src": "out/**",
-      "use": "@vercel/static"
+      "src": "package.json",
+      "use": "@vercel/next"
     }
   ],
   "env": {
@@ -12,10 +12,10 @@
     "NEXT_PUBLIC_APP_VERSION": "POC v1.0",
     "NEXT_PUBLIC_DEMO_MODE": "true"
   },
-  "routes": [
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/"
     }
   ]
 } 
