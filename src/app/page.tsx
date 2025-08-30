@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { TabType, type ChatMessage as ChatMessageType, type KnowledgeItem } from "@/types";
 import Image from "next/image";
+import logoImage from '@/assets/images/logo.png';
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabType>('chat');
@@ -318,7 +319,7 @@ export default function HomePage() {
                                  {/* Main Image Placeholder */}
                                    <div className="relative w-80 h-80 lg:w-96 lg:h-96 bg-gradient-to-br from-white/20 to-white/10 rounded-3xl shadow-2xl border border-white/30 backdrop-blur-sm flex items-center justify-center">
                     <Image
-                      src="/logo.png"
+                      src={logoImage}
                       alt="SIANG JAI Logo"
                       width={200}
                       height={200}
