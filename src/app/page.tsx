@@ -44,7 +44,7 @@ export default function HomePage() {
   const [kb, setKb] = useState<KnowledgeItem[]>([
     {
       title: "AI Call Center System",
-      snippet: "ระบบศูนย์บริการ AI แบบครบวงจรสำหรับผู้พิการทางการได้ยิน"
+      snippet: "ระบบ AI Empowerment เพื่อสร้างงาน Call Center คุณภาพสูงสำหรับผู้พิการ"
     },
     {
       title: "บริการหลัก",
@@ -279,7 +279,7 @@ export default function HomePage() {
               </h1>
               
               <p className="text-xl lg:text-2xl text-[#1A1A1A] mb-8 max-w-2xl lg:max-w-none leading-relaxed font-anuphan-medium">
-                ระบบศูนย์บริการ AI แบบครบวงจรสำหรับผู้พิการทางการได้ยิน
+              ระบบ AI Empowerment เพื่อสร้างงาน Call Center คุณภาพสูงสำหรับผู้พิการ
                 <br className="hidden sm:block" />
                 <span className="text-[#FFD700] font-semibold">ขับเคลื่อนอนาคตด้วยนวัตกรรมในยุคปัญญาประดิษฐ์</span>
               </p>
